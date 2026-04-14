@@ -249,8 +249,8 @@ const CHROME_PATTERNS = [
   /^\s*Reset:.*$/,
   /^\s*Thinking:.*$/,
   /^\s*⏵⏵.*bypass permissions.*$/,
-  /^\s*[·•]\s*Tip:.*$/,
-  /^\s*[·•]\s*Ran \d+ stop hook.*$/,
+  /^\s*[·•●]\s*Tip:.*$/,
+  /^\s*[·•●]\s*Ran \d+ stop hook.*$/,
   // Horizontal rule separator lines (Claude's ──── dividers)
   /^[\s─━═]{20,}$/,
   // Box-drawing ASCII table borders (top, bottom, separators)
@@ -261,6 +261,25 @@ const CHROME_PATTERNS = [
   /^\s*⎿\s*Key ".*" sent to pane \d+\./,
   /^\s*⎿\s*Updated task #\d+ status\s*$/,
   /^\s*⎿\s*Task #\d+ created successfully.*$/,
+  // OmniClaude self-observation events — watcher event + "Standing by" acks
+  // are pure meta-telemetry that dominate the feed but never carry new signal.
+  // Keep substantive `●` lines (tool calls, real findings) — strip only the
+  // acks that always say the same thing.
+  /^\s*●\s*Monitor event: ".*"\s*$/,
+  /^\s*●\s*Self-event\.?\s*([^.]*)?(Standing by\.?|Watching\.?|Awaiting.*)\s*$/,
+  /^\s*●\s*Self-event \+ heartbeat\..*$/,
+  /^\s*●\s*Heartbeat\.?\s*(Standing by\.?)?\s*$/,
+  /^\s*●\s*Metrics \+ heartbeat\..*Standing by\.?\s*$/,
+  // Pane N <state>. <acknowledgement>. — covers "idle|working|false positive"
+  // with any of "Standing by|Watching|Ignored" as the follow-up verb.
+  /^\s*●\s*Pane \d+\s+.{1,40}\.\s*(Standing by|Watching|Ignored|Awaiting.*)\.?\s*$/,
+  /^\s*●\s*No new.*learnings.*Standing by\.?\s*$/,
+  /^\s*●\s*Claim \d+\s+(saved|guardado|guardada)\.\s*Standing by\.?\s*$/,
+  // Stop-hook error body (the `● Ran N stop hook` prefix line is already
+  // filtered above; this catches the multi-line boilerplate that follows).
+  /^\s*⎿\s*Stop hook error:\s*AUTO-SAVE checkpoint.*$/,
+  /^\s*mcp__memorymaster__ingest_claim\. Ingest:.*$/,
+  /^\s*credentials, IPs, tokens, or code\. After saving.*$/,
 ];
 
 function stripClaudeChrome(text) {
@@ -268,6 +287,44 @@ function stripClaudeChrome(text) {
     .split('\n')
     .filter(line => !CHROME_PATTERNS.some(p => p.test(line)))
     .join('\n');
+}
+
+// Collapse multi-line `●  <server> - <tool> (MCP)(arg: "...really long...")`
+// call blocks. Claude TUI wraps long MCP args across many deeply-indented
+// continuation lines (observed: `ingest_claim` call with full `text:` payload
+// can wrap 6-15 lines). The `●` line stays visible so readers see WHICH tool
+// ran; continuation lines collapse to an ellipsis.
+//
+// Detection: a `●` line containing `(MCP)(` where subsequent lines are
+// heavily indented (column 20+) and don't start with a new `●` or `⎿`.
+function collapseMcpCalls(text) {
+  const lines = text.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    const m = l.match(/^(\s*)●\s+([^(]+?)\s+\(MCP\)\(/);
+    if (!m) { out.push(l); continue; }
+    const [, indent, toolName] = m;
+    const paddingThreshold = indent.length + 10;
+    const block = [l];
+    let j = i + 1;
+    while (j < lines.length) {
+      const cont = lines[j];
+      if (!cont.trim()) break;
+      const firstNonSpace = cont.search(/\S/);
+      if (firstNonSpace < paddingThreshold) break;
+      if (/^\s*[●⎿]/.test(cont)) break;
+      block.push(cont);
+      j++;
+    }
+    if (block.length > 1) {
+      out.push(`${indent}● ${toolName.trim()} (MCP)(…)`);
+      i = j - 1;
+    } else {
+      out.push(l);
+    }
+  }
+  return out.join('\n');
 }
 
 // Collapse `⎿`-initiated tool-result blocks longer than `maxLines` into a 1-line
@@ -418,7 +475,7 @@ function formatPaneLabel(project, identity, isDuplicate) {
 
 // --- Build the live view HTML ---
 function buildLiveHtml(project, paneId, rawText, startTime, paneLabel) {
-  const cleaned = collapseToolResults(stripClaudeChrome(stripAnsi(rawText)))
+  const cleaned = collapseToolResults(stripClaudeChrome(collapseMcpCalls(stripAnsi(rawText))))
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 
   // Preserve spacing: keep single empty lines, add breathing room before bullets
