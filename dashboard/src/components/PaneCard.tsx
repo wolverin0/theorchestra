@@ -1,7 +1,20 @@
 import { useEffect, useState } from 'react';
 import { api, Pane } from '../api';
+import { PermissionButtons } from './PermissionButtons';
 
-export function PaneCard({ pane, onChange }: { pane: Pane; onChange: () => void }) {
+export interface PaneCardProps {
+  pane: Pane;
+  onChange: () => void;
+  onPrompt: (pane: Pane) => void;         // opens the PromptComposer modal
+  onMinimize?: () => void;                 // only set by Desktop view
+  selected?: boolean;                      // multi-select in Grid view
+  onToggleSelect?: (paneId: number) => void;
+  showSelection?: boolean;
+}
+
+export function PaneCard({
+  pane, onChange, onPrompt, onMinimize, selected, onToggleSelect, showSelection,
+}: PaneCardProps) {
   const [output, setOutput] = useState<string>('');
 
   useEffect(() => {
@@ -12,9 +25,12 @@ export function PaneCard({ pane, onChange }: { pane: Pane; onChange: () => void 
     return () => { alive = false; clearInterval(t); };
   }, [pane.pane_id]);
 
+  const isPermission = pane.status === 'permission';
   const statusClass = `status-pill ${pane.status || 'unknown'}`;
   const projectName = pane.project_name || pane.project?.split(/[/\\]/).pop() || '—';
-  const identity = pane.is_claude ? 'claude' : (pane.title?.toLowerCase().includes('gpt') ? 'codex' : '?');
+  const identity = pane.is_claude
+    ? 'claude'
+    : (pane.title?.toLowerCase().includes('gpt') || output.toLowerCase().includes('gpt-') ? 'codex' : '?');
 
   const kill = async () => {
     if (!confirm(`Kill pane ${pane.pane_id} (${projectName})?`)) return;
@@ -25,30 +41,44 @@ export function PaneCard({ pane, onChange }: { pane: Pane; onChange: () => void 
   const sendEnter = () => api.sendKey(pane.pane_id, 'enter');
   const sendY = () => api.sendKey(pane.pane_id, 'y');
 
-  const prompt = async () => {
-    const text = window.prompt(`Send prompt to pane ${pane.pane_id}:`);
-    if (text) {
-      await api.sendPrompt(pane.pane_id, text);
-      onChange();
-    }
-  };
-
   return (
-    <article className="pane-card">
+    <article className={`pane-card${selected ? ' pane-card--selected' : ''}${isPermission ? ' pane-card--permission' : ''}`}>
       <div className="pane-card__head">
+        {showSelection && (
+          <input
+            type="checkbox"
+            className="pane-card__select"
+            checked={!!selected}
+            onChange={(e) => { e.stopPropagation(); onToggleSelect?.(pane.pane_id); }}
+            aria-label={`Select pane-${pane.pane_id}`}
+          />
+        )}
         <span>
           <span className="project">[{projectName}]</span>{' '}
           <span className="identity">{identity}</span>{' '}
           <span style={{ color: 'var(--fg-dim)' }}>· pane-{pane.pane_id}</span>
         </span>
-        <span className={statusClass}>{pane.status || 'unknown'}</span>
+        <span>
+          <span className={statusClass}>{pane.status || 'unknown'}</span>
+          {onMinimize && (
+            <button className="pane-card__minimize" onClick={onMinimize} title="Minimize" aria-label="Minimize">_</button>
+          )}
+        </span>
       </div>
-      <div className="pane-card__body">{output || <span style={{ color: 'var(--fg-dim)' }}>(no output yet)</span>}</div>
+      <div className="pane-card__body">
+        {output || <span style={{ color: 'var(--fg-dim)' }}>(no output yet)</span>}
+      </div>
       <div className="pane-card__foot">
-        <button onClick={prompt}>Prompt</button>
-        <button onClick={sendEnter}>Enter</button>
-        <button onClick={sendY}>Y</button>
-        <button className="danger" onClick={kill}>Kill</button>
+        {isPermission ? (
+          <PermissionButtons paneId={pane.pane_id} onResolved={onChange} />
+        ) : (
+          <>
+            <button onClick={() => onPrompt(pane)}>Prompt</button>
+            <button onClick={sendEnter}>Enter</button>
+            <button onClick={sendY}>Y</button>
+            <button className="danger" onClick={kill}>Kill</button>
+          </>
+        )}
       </div>
     </article>
   );
