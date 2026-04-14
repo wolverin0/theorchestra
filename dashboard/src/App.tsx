@@ -5,6 +5,7 @@ import { DesktopView } from './components/DesktopView';
 import { EventsStream } from './components/EventsStream';
 import { TasksPanel } from './components/TasksPanel';
 import { PromptComposer } from './components/PromptComposer';
+import { Toasts } from './components/Toasts';
 import { useLocalStorage } from './hooks/useLocalStorage';
 
 type ViewKey = 'grid' | 'desktop' | 'events' | 'tasks';
@@ -125,7 +126,7 @@ export function App() {
           <DesktopView
             panes={panes}
             onChange={refreshPanes}
-            onPrompt={openComposer}
+            events={events}
           />
         )}
         {activeView === 'events' && (
@@ -144,6 +145,8 @@ export function App() {
         <h2>Active tasks</h2>
         <TasksPanel tasks={tasks} />
       </section>
+
+      <Toasts events={events} />
 
       <PromptComposer
         open={composerOpen}
