@@ -2,6 +2,23 @@
 
 All notable changes to clawfleet are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.3.0] - 2026-04-14
+
+### Added — ops & observability
+
+- **`src/diff-reporter.cjs`** — compact post-session-completed git-stat summary. Returns `{ summary, files, top, html, plain, branch, clean }` or `null` when there are no tracked changes. Designed for OmniClaude to post "what just changed?" to the pane's Telegram topic after a `session_completed` event. CLI mode: `node src/diff-reporter.cjs [cwd] [--json]`. Read-only.
+- **`src/ntfy-notifier.cjs`** — [ntfy.sh](https://ntfy.sh) backup push notification channel. `isEnabled()` returns false when `NTFY_TOPIC` is unset so callers can always-call. Supports public ntfy.sh + self-hosted + token-authenticated instances. 80 LOC, Node stdlib only.
+- **`ecosystem.config.cjs`** — PM2 production supervisor config. Two apps: `clawfleet-streamer` (telegram-streamer.cjs) + `clawfleet-dashboard` (dashboard-server.cjs). Watcher stays under OmniClaude's Monitor tool by default (commented config template included).
+
+### Documented
+
+- `docs/features/diff-reporter.md` — OmniClaude Event Reaction Tree integration + rate-limit/filter heuristics (skip trivial edits).
+- `docs/features/ntfy-and-pm2.md` — ntfy setup (public / self-hosted / authenticated), PM2 commands, rationale for keeping OmniClaude itself outside PM2.
+
+### Env vars
+
+- `NTFY_TOPIC` (enables ntfy), `NTFY_SERVER` (default `https://ntfy.sh`), `NTFY_TOKEN` (optional bearer).
+
 ## [1.2.0] - 2026-04-14
 
 ### Added — new wezbridge MCP tools (6)
