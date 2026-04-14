@@ -1,12 +1,12 @@
 import { Pane } from '../api';
 
 export interface DockBarProps {
-  minimized: number[];                 // pane_ids currently minimized
-  panes: Pane[];                        // all panes (for lookup of project_name)
+  minimized: number[];
+  panes: Pane[];
   onRestore: (paneId: number) => void;
 }
 
-// Bottom dock showing minimized Desktop windows. Click to restore.
+// v3.1-style circular avatars with 2-letter initials + status dot underneath.
 export function DockBar({ minimized, panes, onRestore }: DockBarProps) {
   if (minimized.length === 0) return null;
   const byId = new Map(panes.map(p => [p.pane_id, p]));
@@ -14,11 +14,13 @@ export function DockBar({ minimized, panes, onRestore }: DockBarProps) {
     <div className="dock-bar" role="toolbar" aria-label="Minimized windows">
       {minimized.map((id) => {
         const p = byId.get(id);
-        const label = p ? `[${p.project_name || '?'}] pane-${id}` : `pane-${id}`;
-        const dot = p?.status === 'working' ? 'dot working' : p?.status === 'permission' ? 'dot permission' : 'dot idle';
+        const label = p?.project_name || `pane-${id}`;
+        const initials = label.slice(0, 2).toUpperCase();
+        const statusDot = p?.status === 'working' ? 'working' : p?.status === 'permission' ? 'permission' : 'idle';
         return (
-          <button key={id} className="dock-item" onClick={() => onRestore(id)} title={label}>
-            <span className={dot} /> {label}
+          <button key={id} className="dock-avatar" onClick={() => onRestore(id)} title={`${label} · pane-${id}`}>
+            <span className="dock-avatar__letters">{initials}</span>
+            <span className={`dock-avatar__dot ${statusDot}`} />
           </button>
         );
       })}

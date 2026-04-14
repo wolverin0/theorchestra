@@ -438,3 +438,256 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: 
   height: 100%;
   overflow: auto;
 }
+
+/* ───── v2.1 additions: v3.1 aesthetic ───── */
+
+/* Desktop toolbar (above the window canvas): layout buttons + broadcast */
+.desktop-wrap { display: flex; flex-direction: column; height: 100%; }
+.desktop-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  gap: 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+}
+.desktop-toolbar__left, .desktop-toolbar__right {
+  display: flex; gap: 6px; align-items: center;
+}
+.layout-btn {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.layout-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(88, 166, 255, 0.06); }
+.broadcast-input {
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 5px 10px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  width: 260px;
+}
+.broadcast-input:focus { outline: none; border-color: var(--accent); }
+
+/* Desktop view: make room for toolbar and dock */
+.desktop-wrap .desktop {
+  flex: 1;
+  min-height: 500px;
+}
+
+/* v3.1-style window (.pane-card--desktop) — mac traffic lights + softer shell */
+.pane-card--desktop {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.pane-card--desktop .pane-card__head {
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(0,0,0,0.05)), var(--bg-3);
+  padding: 8px 12px 8px 12px;
+  cursor: grab;
+  position: relative;
+  min-height: 32px;
+}
+.pane-card--desktop .pane-card__head:active { cursor: grabbing; }
+.pane-card--desktop .pane-card__title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+  font-family: var(--mono);
+  pointer-events: none;
+}
+.pane-card--desktop .dwin-name { color: var(--fg); letter-spacing: 0.02em; }
+
+/* Mac-style traffic lights */
+.dwin-dots { display: inline-flex; gap: 6px; align-items: center; }
+.dwin-dots span {
+  display: block;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #3a3d42;
+  cursor: pointer;
+  transition: transform 0.1s;
+}
+.dwin-dots span:hover { transform: scale(1.15); }
+.dwin-dots .d-red    { background: #ff5f57; }
+.dwin-dots .d-yellow { background: #febc2e; }
+.dwin-dots .d-green  { background: #28c840; }
+
+.pane-card--desktop .pane-card__body {
+  background: #05080d;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.pane-card--desktop .pane-card__body::-webkit-scrollbar { width: 8px; }
+.pane-card--desktop .pane-card__body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+.pane-card--desktop .pane-card__foot {
+  padding: 0;
+  border-top: 1px solid var(--border);
+  background: transparent;
+}
+
+/* Inline prompt bar (v3.1 .dwin-prompt) */
+.prompt-bar {
+  display: flex;
+  gap: 0;
+  padding: 6px 8px;
+  background: var(--bg-3);
+  align-items: center;
+}
+.prompt-bar__input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 3px 0 0 3px;
+  padding: 5px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  min-width: 0;
+}
+.prompt-bar__input:focus { outline: none; border-color: var(--accent); }
+.prompt-bar__input:disabled { opacity: 0.5; }
+.prompt-bar__btn {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-left-width: 0;
+  padding: 5px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.prompt-bar__btn:last-child { border-radius: 0 3px 3px 0; }
+.prompt-bar__btn:hover { background: var(--bg-3); color: var(--accent); border-color: var(--accent); }
+.prompt-bar__btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.prompt-bar__btn--send {
+  background: var(--accent);
+  color: var(--bg);
+  font-weight: 600;
+  border-color: var(--accent);
+}
+.prompt-bar__btn--send:hover:not(:disabled) { filter: brightness(1.15); background: var(--accent); color: var(--bg); }
+
+/* Dock bar redesigned: circular avatars with 2-letter initials + status dot */
+.dock-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 12px;
+  display: flex;
+  gap: 12px;
+  padding: 10px 18px;
+  background: rgba(19, 23, 31, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  z-index: 100000;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.dock-avatar {
+  position: relative;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 2px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+  color: var(--fg);
+}
+.dock-avatar:hover {
+  transform: translateY(-3px);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.dock-avatar__letters {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.dock-avatar__dot {
+  position: absolute;
+  bottom: -3px; right: -3px;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--fg-dim);
+  border: 2px solid var(--bg-2);
+}
+.dock-avatar__dot.idle { background: var(--accent-2); }
+.dock-avatar__dot.working { background: var(--accent); animation: pulse 1.4s infinite; }
+.dock-avatar__dot.permission { background: var(--warn); animation: pulse 0.8s infinite; }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+/* A2A arrows overlay — just make the SVG container the right size */
+.a2a-arrows { position: absolute; inset: 0; pointer-events: none; z-index: 50; }
+
+/* Toasts: slide-in stack in the top-right */
+.toast-stack {
+  position: fixed;
+  top: 60px;
+  right: 16px;
+  z-index: 300000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 340px;
+}
+.toast {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 10px 32px 10px 12px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  position: relative;
+  animation: slideInRight 0.2s ease-out;
+}
+@keyframes slideInRight {
+  from { transform: translateX(120%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.toast--completed { border-left-color: var(--accent-2); }
+.toast--permission { border-left-color: var(--warn); }
+.toast--orphaned { border-left-color: var(--err); }
+.toast--info { border-left-color: var(--accent); }
+.toast__title { font-size: 12px; font-weight: 600; color: var(--fg); }
+.toast__body { font-size: 11px; color: var(--fg-dim); font-family: var(--mono); margin-top: 4px; }
+.toast__close {
+  position: absolute;
+  top: 6px; right: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 6px;
+}
+.toast__close:hover { color: var(--err); }
