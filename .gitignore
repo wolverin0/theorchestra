@@ -37,3 +37,4 @@ scripts/.*-stub.cjs
 # Phase 2 dashboard build output (ignored until built)
 dashboard/dist/
 dashboard/node_modules/
+tmp/dashboard-react-v2.1/
