@@ -266,17 +266,25 @@ function isoForFilename() {
 }
 
 async function handlePostA2AHandoff(req, res) {
+  // v2.3.1 redesign: the dashboard does NOT write files or inject into the target.
+  // Instead, it sends an instructive prompt to the SOURCE pane, delegating the
+  // full handoff authoring + A2A dispatch to the source Claude. This gives the
+  // source pane authorial control over its own handoff (it has the richest
+  // context) and makes the flow traceable: handoff file + A2A envelope both
+  // originate from the source pane itself, via wezbridge MCP.
   try {
     const body = await parseBody(req);
     const source_pane = parseInt(body.source_pane, 10);
     const target_pane = parseInt(body.target_pane, 10);
-    const summary = typeof body.summary === 'string' ? body.summary : '';
     const instruction = typeof body.instruction === 'string' ? body.instruction : '';
+    // `context` is optional extra info from the dashboard user to include in the prompt.
+    const context = typeof body.context === 'string' ? body.context
+      : typeof body.summary === 'string' ? body.summary : '';
     if (!Number.isFinite(source_pane) || !Number.isFinite(target_pane)) {
       return sendJson(res, 400, { error: 'source_pane and target_pane must be integers' });
     }
-    if (!summary.trim() || !instruction.trim()) {
-      return sendJson(res, 400, { error: 'summary and instruction are required' });
+    if (!instruction.trim()) {
+      return sendJson(res, 400, { error: 'instruction is required' });
     }
 
     const panes = discoverPanes ? discoverPanes() : [];
@@ -289,18 +297,6 @@ async function handlePostA2AHandoff(req, res) {
       return sendJson(res, 400, { error: `target pane ${target_pane} not found or not claude` });
     }
 
-    const targetCwd = tgtPane.project;
-    if (!targetCwd) {
-      return sendJson(res, 400, { error: `target pane ${target_pane} has no resolvable cwd` });
-    }
-
-    // corr + timestamps
-    const corrShort = Math.random().toString(36).slice(2, 8).padEnd(6, '0').slice(0, 6);
-    const corr = `handoff-${corrShort}`;
-    const tsFile = isoForFilename();
-    const tsIso = new Date().toISOString();
-
-    // Source project name (prefer projectName, fall back to basename of cwd)
     const srcProjectName = srcPane.projectName
       || (srcPane.project ? srcPane.project.split(/[\\/]/).filter(Boolean).pop() : null)
       || 'unknown';
@@ -308,75 +304,67 @@ async function handlePostA2AHandoff(req, res) {
       || (tgtPane.project ? tgtPane.project.split(/[\\/]/).filter(Boolean).pop() : null)
       || 'unknown';
 
-    // Scrollback
-    let scrollback = '';
-    try { scrollback = stripAnsi(wez.getFullText(source_pane, 30) || ''); }
-    catch (e) { scrollback = `[error fetching scrollback: ${e.message}]`; }
+    // Generate corr the dashboard recommends — source pane is free to reuse or mint its own.
+    const corrShort = Math.random().toString(36).slice(2, 8).padEnd(6, '0').slice(0, 6);
+    const corr = `handoff-${corrShort}`;
+    const tsFile = isoForFilename();
 
-    // Filename — unique per handoff, never overwrite (claim 9431)
-    const baseName = `handoff-from-${slugify(srcProjectName)}-${tsFile}-${corrShort}`;
-    const handoffsDir = path.join(targetCwd, 'handoffs');
-    fs.mkdirSync(handoffsDir, { recursive: true });
+    // Suggested handoff filename — the SOURCE pane writes it in its OWN project's
+    // handoffs/ folder, named after the target. Appends unique timestamp+corr.
+    const suggestedFilename = `handoff-to-${slugify(tgtProjectName)}-${tsFile}-${corrShort}.md`;
+    const suggestedPath = `handoffs/${suggestedFilename}`;
 
-    const bodyMd = [
-      `# Handoff from ${srcProjectName} (pane-${source_pane}) → ${tgtProjectName} (pane-${target_pane})`,
-      '',
-      `**Sent**: ${tsIso}`,
-      `**Corr**: ${corr}`,
-      `**Source project**: ${srcPane.project || '(unknown)'}`,
-      '',
-      '## Summary',
-      summary,
-      '',
-      '## Instruction',
-      instruction,
-      '',
-      '## Source scrollback (last 30 lines)',
-      '```',
-      scrollback,
-      '```',
-      '',
-    ].join('\n');
-
-    // Write with wx flag — never overwrite. Collision: append +N.
-    let finalName = `${baseName}.md`;
-    let finalPath = path.join(handoffsDir, finalName);
-    let attempt = 0;
-    while (true) {
-      try {
-        fs.writeFileSync(finalPath, bodyMd, { flag: 'wx' });
-        break;
-      } catch (err) {
-        if (err.code !== 'EEXIST') throw err;
-        attempt += 1;
-        if (attempt > 50) throw new Error('could not find unique handoff filename');
-        finalName = `${baseName}-${attempt}.md`;
-        finalPath = path.join(handoffsDir, finalName);
-      }
-    }
-
-    // Inject envelope into target pane
-    const envelope = [
-      `[A2A from pane-${source_pane} to pane-${target_pane} | corr=${corr} | type=request]`,
-      `Handoff received. File: handoffs/${finalName}`,
-      '',
-      instruction,
-      '',
-      'Read the handoff file first, then acknowledge with an ack envelope and proceed.',
+    // Instruction prompt sent to SOURCE pane. This is what the source Claude receives
+    // and executes using its wezbridge MCP tools.
+    const prompt = [
+      `[Dashboard A2A Handoff Request]`,
+      ``,
+      `You are pane-${source_pane} (${srcProjectName}). A handoff has been requested FROM you TO pane-${target_pane} (${tgtProjectName}, cwd: ${tgtPane.project || 'unknown'}).`,
+      ``,
+      `Instruction for target: ${instruction}`,
+      ...(context.trim() ? [``, `Additional context from the dashboard user:`, context.trim()] : []),
+      ``,
+      `## Do these steps in order`,
+      ``,
+      `1. **Author a handoff file** at \`${suggestedPath}\` (relative to YOUR current cwd). Include:`,
+      `   - What you have been doing recently`,
+      `   - Current state / work-in-progress`,
+      `   - What the target needs to know to pick up or contribute`,
+      `   - Any files / commits / context relevant to the instruction above`,
+      `   - Use a fresh unique filename — NEVER overwrite an existing handoff file.`,
+      ``,
+      `2. **Contact pane-${target_pane} via wezbridge MCP** using this exact envelope (the A2A hard-rule is: send_prompt followed by send_key 'enter'):`,
+      `   \`\`\``,
+      `   [A2A from pane-${source_pane} to pane-${target_pane} | corr=${corr} | type=request]`,
+      `   ${instruction}`,
+      `   Full handoff context is in: ${srcProjectName}/${suggestedPath}`,
+      `   \`\`\``,
+      `   Call: \`mcp__wezbridge__send_prompt(pane_id=${target_pane}, text=<envelope above>)\` then \`mcp__wezbridge__send_key(pane_id=${target_pane}, key='enter')\`.`,
+      ``,
+      `3. **Briefly acknowledge here** that the file was written + the target was contacted, with the filename and corr id.`,
+      ``,
+      `Do not do the target's work yourself. Your job is only to author the handoff file and delegate via MCP.`,
     ].join('\n');
 
     try {
-      wez.sendText(target_pane, envelope);
-      wez.sendTextNoEnter(target_pane, '\r');
+      wez.sendText(source_pane, prompt);
+      wez.sendTextNoEnter(source_pane, '\r');
     } catch (e) {
-      return sendJson(res, 500, { error: `wrote file but failed to inject: ${e.message}`, file: `handoffs/${finalName}` });
+      return sendJson(res, 500, { error: `failed to send prompt to source pane: ${e.message}` });
     }
 
-    // Track in a2aState
+    // Track corr as active (source pane will eventually emit matching envelopes via its MCP calls).
     const now = Date.now();
     a2aTouch(corr, { from: source_pane, to: target_pane, status: 'active', firstSeen: now, lastSeen: now });
 
-    sendJson(res, 200, { ok: true, corr, file: `handoffs/${finalName}`, target_pane });
+    sendJson(res, 200, {
+      ok: true,
+      corr,
+      source_pane,
+      target_pane,
+      suggested_file: suggestedPath,
+      note: 'Instruction prompt sent to source pane. Source pane will author handoff file + contact target via wezbridge MCP.',
+    });
   } catch (err) {
     log(`POST /api/a2a/handoff error: ${err.message}`);
     sendJson(res, 500, { error: err.message });

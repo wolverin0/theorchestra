@@ -2350,57 +2350,59 @@ async function openHandoffModal(sourcePaneId, targetPaneId) {
   const src = sessions.find(s => s.pane_id === sourcePaneId);
   const tgt = sessions.find(s => s.pane_id === targetPaneId);
   if (!src || !tgt) { toast('Pane not found'); return; }
-  // Prefill summary with source scrollback
-  let prefill = '';
-  try {
-    const r = await fetch(API + '/api/sessions/' + sourcePaneId + '/output?lines=60');
-    const d = await r.json();
-    const text = stripAnsi(d.output || '');
-    prefill = text.split('\n').filter(l => l.trim()).slice(-30).join('\n').slice(0, 2000);
-  } catch {}
   const srcName = esc(src.project_name || 'pane ' + sourcePaneId);
   const tgtName = esc(tgt.project_name || 'pane ' + targetPaneId);
+  // v2.3.1: no more prefilled summary. The SOURCE pane authors its own handoff.
+  // The dashboard user only writes the instruction + optional extra context.
   const body =
-    '<div><div class="v2-field-label">Summary</div>' +
-      '<textarea class="v2-textarea" id="hoSummary" placeholder="Short handoff summary...">' + esc(prefill) + '</textarea></div>' +
-    '<div><div class="v2-field-label">Instruction</div>' +
+    '<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px">' +
+      'This sends an instruction to <b>' + srcName + '</b> to author a handoff file ' +
+      '(in its own <code>handoffs/</code> folder) and contact <b>' + tgtName + '</b> via wezbridge MCP.' +
+    '</div>' +
+    '<div><div class="v2-field-label">Instruction (what should ' + tgtName + ' do?)</div>' +
       '<div class="v2-template-chips">' +
-        '<span class="v2-template-chip" onclick="applyHandoffTemplate(0)">Continue this work. Full handoff in {file}.</span>' +
-        '<span class="v2-template-chip" onclick="applyHandoffTemplate(1)">Review what I did and send your comments when done.</span>' +
-        '<span class="v2-template-chip" onclick="applyHandoffTemplate(2)">Take over — I\'m hitting rate limits.</span>' +
+        '<span class="v2-template-chip" onclick="applyHandoffTemplate(0)">Review the plan I just created.</span>' +
+        '<span class="v2-template-chip" onclick="applyHandoffTemplate(1)">Continue my current work from where I left off.</span>' +
+        '<span class="v2-template-chip" onclick="applyHandoffTemplate(2)">Audit my recent commits and send feedback.</span>' +
       '</div>' +
-      '<textarea class="v2-textarea" id="hoInstruction" placeholder="What should the target do?"></textarea></div>';
+      '<textarea class="v2-textarea" id="hoInstruction" placeholder="e.g. &quot;Review the plan you just created and send feedback when done.&quot;"></textarea></div>' +
+    '<div><div class="v2-field-label">Extra context for ' + srcName + ' (optional)</div>' +
+      '<textarea class="v2-textarea" id="hoSummary" placeholder="Anything the source pane should include in the handoff that it might not know on its own..." style="min-height:60px"></textarea></div>';
   const footer =
     '<button class="btn btn-ghost" onclick="closeModal()">Cancel</button>' +
-    '<button class="btn btn-accent" onclick="submitHandoff(' + sourcePaneId + ',' + targetPaneId + ')">Send</button>';
+    '<button class="btn btn-accent" onclick="submitHandoff(' + sourcePaneId + ',' + targetPaneId + ')">Send to ' + srcName + '</button>';
   openModal({ title: 'Handoff: ' + srcName + ' → ' + tgtName, bodyHtml: body, footer });
 }
 function applyHandoffTemplate(i) {
   const ta = document.getElementById('hoInstruction');
   if (!ta) return;
   const tpl = [
-    'Continue this work. Full handoff in {file}.',
-    'Review what I did and send your comments when done.',
-    "Take over — I'm hitting rate limits."
+    'Review the plan I just created.',
+    'Continue my current work from where I left off.',
+    'Audit my recent commits and send feedback.'
   ];
   ta.value = tpl[i] || '';
   ta.focus();
 }
 async function submitHandoff(sourcePaneId, targetPaneId) {
-  const summary = (document.getElementById('hoSummary') || {}).value || '';
+  const context = (document.getElementById('hoSummary') || {}).value || '';
   const instruction = (document.getElementById('hoInstruction') || {}).value || '';
   if (!instruction.trim()) { toast('Instruction is required'); return; }
   try {
     const r = await fetch(API + '/api/a2a/handoff', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_pane: sourcePaneId, target_pane: targetPaneId, summary, instruction })
+      body: JSON.stringify({ source_pane: sourcePaneId, target_pane: targetPaneId, context, instruction })
     });
     const d = await r.json();
     if (d.ok) {
       closeModal();
-      pushToast({ kind: 'success', title: '✅ Handoff sent → pane-' + targetPaneId, body: 'corr=' + esc(shortCorr(d.corr || '')) });
-      recordHandoffHistory({ source_pane: sourcePaneId, target_pane: targetPaneId, corr: d.corr, file: d.file, timestamp: new Date().toISOString(), instruction });
+      pushToast({
+        kind: 'success',
+        title: '✅ Handoff instruction sent to pane-' + sourcePaneId,
+        body: 'pane-' + sourcePaneId + ' will now author the handoff file + contact pane-' + targetPaneId + ' via wezbridge MCP · corr=' + esc(shortCorr(d.corr || '')),
+      });
+      recordHandoffHistory({ source_pane: sourcePaneId, target_pane: targetPaneId, corr: d.corr, file: d.suggested_file || d.file, timestamp: new Date().toISOString(), instruction });
     } else {
       toast('Handoff failed: ' + (d.error || 'unknown'));
     }

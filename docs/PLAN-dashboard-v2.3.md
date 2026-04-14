@@ -125,6 +125,14 @@ Replace the current Live Feed full-column rail with a 260px collapsible sidebar 
 
 ---
 
+## Phase 4 — A2A handoff push (REDESIGNED v2.3.1 per user feedback 2026-04-14)
+
+### Design note (v2.3 → v2.3.1)
+
+v2.3 original: backend wrote handoff file to target's cwd + injected envelope directly into target pane.
+
+**v2.3.1 actual (shipped)**: backend sends an INSTRUCTIVE PROMPT to the SOURCE pane. The source pane then (a) authors the handoff file in its OWN `handoffs/` folder, (b) contacts the target via wezbridge MCP `send_prompt` + `send_key('enter')`. This gives the source Claude authorial control over its own handoff (richest context) and makes every handoff a clean A2A envelope originating from the source's own MCP calls.
+
 ## Phase 4 — A2A handoff push (NEW, user brainstorm 2026-04-14)
 
 One-click context transfer from pane to pane, persisted immutably per-project.
