@@ -2,6 +2,22 @@
 
 All notable changes to clawfleet are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.4.0] - 2026-04-14
+
+### Added — Telegram UX helpers
+
+- **`src/permission-alerts.cjs`** — `formatPermissionAlert({paneId, projectName, promptPreview})` renders a Telegram-ready HTML block asking the user to reply `/approve`, `/always`, or `/reject`. `parsePermissionCommand(text)` maps the reply back to a `send_key` payload (`1`, `2`, `3`). Text-command flow because the Telegram channel plugin owns `getUpdates` — inline buttons gated on an upstream plugin patch (deferred to Phase 4).
+- **`src/project-scanner.cjs`** — enumerates every Claude Code project under `~/.claude/projects/` AND every Codex CLI session under `~/.codex/sessions/`. Resolves the real cwd by reading the newest JSONL's `cwd` field (30 KB tail read, safe on multi-GB logs). Returns `{ agent: 'claude'|'codex', realPath, name, sessionCount, latestSessionUuid, latestActivityMs }`. CLI mode: `node src/project-scanner.cjs [--json] [--no-codex] [--limit N]`.
+
+### Documented
+
+- `docs/features/permission-commands.md` — end-to-end flow, OmniClaude Event Reaction Tree entry, security note (anyone in the Telegram group can approve).
+- `docs/features/project-scanner.md` — OmniClaude `/projects` and `/spawn <name>` command handlers, performance notes.
+
+### Cross-LLM
+
+Project scanner is the first clawfleet module to deliberately index BOTH Claude and Codex sessions — previously every cross-LLM affordance was runtime (spawning Codex panes from Claude). With this, `/projects` can spawn either agent for any project by friendly name.
+
 ## [1.3.0] - 2026-04-14
 
 ### Added — ops & observability
