@@ -25,14 +25,18 @@ const REJECT_KEY  = '3'; // "No"
 function formatPermissionAlert({ paneId, projectName, promptPreview }) {
   const proj = projectName || `pane-${paneId}`;
   const preview = (promptPreview || '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])).slice(0, 240);
-  return [
+  const lines = [
     `🔐 <b>PERMISSION PROMPT</b> — <code>[${proj}]</code> pane-${paneId}`,
-    preview ? `\n<i>${preview}</i>` : '',
-    '\n\nReply in this topic:',
+  ];
+  if (preview) lines.push(`<i>${preview}</i>`);
+  lines.push(
+    '',
+    'Reply in this topic:',
     '• <code>/approve</code>  — allow once',
     '• <code>/always</code>   — allow always',
     '• <code>/reject</code>   — deny',
-  ].join('');
+  );
+  return lines.join('\n');
 }
 
 /**
