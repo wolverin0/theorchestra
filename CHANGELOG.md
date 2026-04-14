@@ -2,6 +2,27 @@
 
 All notable changes to clawfleet are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.5.0] - 2026-04-14
+
+### Added — big feature landing: voice + media + plugins + webhooks
+
+- **`src/voice-handler.cjs`** — OpenAI-compatible Whisper transcription. `downloadTelegramVoice(fileId, botToken)` + `transcribe(path, {language, model, endpoint})`. Zero-dep: pure Node stdlib `https` + manual multipart builder (no `openai` SDK, no `form-data` package). Endpoint overridable for self-hosted Whisper / Groq. Env: `WHISPER_API_KEY`, `WHISPER_ENDPOINT`, `WHISPER_MODEL`, `WHISPER_LANGUAGE`.
+- **`src/media-handler.cjs`** — Telegram photo/document/video/audio/voice → local paths on `os.tmpdir()/clawfleet-media/`. `downloadMessageMedia(msg, botToken)` + `formatPromptPreamble({paths, caption})`. Stable file_id-based filenames (idempotent, no re-downloads). Claude Code's `Read` tool / Codex equivalents open the files directly — no base64, no image processing, no third-party upload.
+- **`src/plugin-host.cjs`** + **`plugins/`** — drop-in replacement for `node src/omni-watcher.cjs` in Monitor configs. Loads `plugins/<name>/index.cjs` (or `.cjs` files at the plugins root), dispatches watcher events to `{name, register(ctx)}` modules. Context is deliberately narrow: `wezterm` + `on/emit/log` + `readOutput` — NO bot, NO pane mutation, NO secrets. Plugins observe and emit; OmniClaude decides. Ships with `plugins/example/` (hello-world) + full API ref at `docs/plugins.md`.
+- **`src/github-webhook.cjs`** — HTTP receiver for GitHub webhooks. Verifies `X-Hub-Signature-256` HMAC (timing-safe). Formats `push`, `pull_request`, `issues`, `release`, `workflow_run` events into Telegram-ready HTML chunks. Emits clawfleet events (`source: 'github'`) on stdout — same JSON-per-line pattern as the watcher. Standalone or mountable on an existing http server via `handleRequest(req, res)`.
+
+### Documented
+
+- `docs/features/voice-prompts.md`, `docs/features/media-forwarding.md`, `docs/features/github-webhooks.md`, `docs/plugins.md`, `plugins/README.md`, `plugins/example/README.md`.
+
+### Architectural rigor
+
+Every new module in this release honors the agent-centric boundary: the observation layer (watchers, plugins, receivers, helpers) cannot post to Telegram, cannot mutate panes, cannot access secrets. OmniClaude — a real Claude Code session — is the single decision point. See claim 9289 for the rule.
+
+### Still pending
+
+- **Inline mode** (`@clawfleet_bot`) — blocked on an upstream Telegram channel plugin patch for `callback_query` / `inline_query` forwarding. Not clawfleet-side work.
+
 ## [1.4.0] - 2026-04-14
 
 ### Added — Telegram UX helpers
