@@ -2,6 +2,34 @@
 
 All notable changes to theorchestra are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.0] - 2026-04-14
+
+### Major — Dashboard v2.0 (windowing + PromptComposer + permission buttons)
+
+User feedback on v1.1 dashboard: "altamente inferior" to the v3.1 ancestor which had drag/resize windows. This release recovers the v3.1 UX bar — **adapted to the agent-centric architecture** — plus new features v3.1 never had.
+
+- **Desktop view** (new tab alongside Grid) — free-form windowed layout via `react-rnd`. Drag by pane header, resize via edges/corners, minimize to bottom dock, focus-to-top on click. Layout persists per-pane to `localStorage[theorchestra:desktop-layout:v2]` with schema-versioned key + parse-failure fallback.
+- **DockBar** — bottom taskbar for minimized windows. Click to restore. Shows project name + status dot.
+- **PromptComposer** — modal replacement for `window.prompt()`. Multiline `<textarea>`, `Ctrl+Enter` submits, `Escape` cancels, last-5 prompts history dropdown (per-user localStorage), **broadcast mode** (checkbox list when ≥2 panes selected in Grid view → sends prompt to all in parallel via `Promise.allSettled`, per-target errors don't block siblings).
+- **Permission inline buttons** — when a pane enters `status: 'permission'`, its action row auto-swaps to `[✅ Approve] [✅✅ Always] [❌ Reject]`, wired to `POST /api/panes/:id/key` with `1`/`2`/`3`. Debounced 500ms per-pane against double-clicks.
+- **View tabs** — `Grid` / `Desktop` / `Events` / `Tasks` at the top; active tab persists to localStorage. Events and Tasks now have full-width views in addition to the sidebar/bottom rails.
+- **Selection + Broadcast** — checkbox on each Grid card, "📢 Broadcast to N" appears in header when ≥1 selected.
+- **New hooks**: `useLocalStorage` (versioned keys + cross-tab sync), `useZStack` (z-index management for Desktop since react-rnd doesn't ship one).
+- **Codex identity detection** — `PaneCard` now scans the output for `gpt-` prefix in addition to title, so Codex panes show `codex` badge.
+
+### Verified E2E
+
+All previously-committed-but-untested pattern REJECTED — per the rule in claim 9393: npm run build + Playwright smoke is now non-optional pre-push. Dashboard v2.0 was validated via claude-in-chrome Playwright MCP with every interaction tested (drag, resize, minimize, restore, select, broadcast, tab switch, localStorage persistence) before this commit. Zero console errors from our code.
+
+### Dependencies
+
+- Added `react-rnd@^10.4.13` (~18KB gzip). Known React 18 StrictMode `findDOMNode` warning — only emits in dev builds, not our production bundle. Replacement with custom `useDraggableResizable` hook tracked for v2.1.
+
+### Out of scope (next releases)
+
+- **v2.0.1**: A2A panel (`GET /api/a2a/pending` + client-side SSE accumulation showing pane-to-pane corr timeline) + maximize-to-modal with full scrollback + Tile/Cascade/Stack layout buttons.
+- **v2.1**: replace react-rnd with custom hook, Cmd+K command palette, dark/light theme toggle, MemoryMaster claims feed, pane-to-pane graph view.
+
 ## [1.5.1] - 2026-04-14
 
 ### Renamed — `clawfleet` → `theorchestra`
