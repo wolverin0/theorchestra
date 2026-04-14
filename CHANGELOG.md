@@ -2,6 +2,27 @@
 
 All notable changes to clawfleet are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.2.0] - 2026-04-14
+
+### Added — new wezbridge MCP tools (6)
+
+- **`split_pane(pane_id, direction?, cwd?, program?, args?)`** — side-by-side or top/bottom split without auto-launching Claude. Opens a shell / Codex / any program next to an existing session.
+- **`set_tab_title(pane_id, title)`** — live rename a WezTerm tab. Best practice for multi-pane projects: `<project>-<agent>` (e.g. `app-codex`, `app-claude`).
+- **`spawn_ssh_domain(domain, cwd?, program?, args?)`** — spawn a pane on a pre-configured WezTerm SSH domain. Run remote Claude/Codex sessions that local OmniClaude can still `send_prompt` / `read_output` / `kill_session` through.
+- **`list_workspaces`** — enumerate WezTerm workspaces and the panes in each.
+- **`switch_workspace(name)`** — activate a workspace (creates if missing).
+- **`spawn_in_workspace(workspace, cwd?, program?, args?)`** — create a new pane directly in a named workspace. Useful for grouping peer panes by project.
+
+### Documented
+
+- `docs/features/split-workspace-remote.md` — `/split`, `/rename`, `/remote` Telegram command handlers for OmniClaude, plus recommended worktree flow for multi-pane peer projects on shared repos.
+- `docs/features/workspaces.md` — `/workspace` command, WezTerm version compatibility caveats, when-to-use `workspaces` vs `split_pane`.
+
+### Compatibility
+
+- Running Claude Code sessions must reload the `wezbridge` MCP server to see the new tools.
+- Some older WezTerm versions may not support all workspace operations — `list_workspaces` is widely supported, `switch_workspace` / `spawn_in_workspace` need recent WezTerm.
+
 ## [1.1.0] - 2026-04-14
 
 ### Added
