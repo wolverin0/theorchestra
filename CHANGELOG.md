@@ -2,6 +2,21 @@
 
 All notable changes to theorchestra are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.3] - 2026-04-15
+
+### Mobile sessions UX — 2×3 grid + slim spawn button (T-059)
+
+User mockup via Telegram: replace the cramped horizontal pill bar with a denser grid that shows more sessions at once and moves the bulky in-list "+ Spawn Session" block to a slim full-width button below.
+
+- `#sidebarList` on `@media (max-width: 768px)` becomes a CSS Grid:
+  `grid-auto-flow: column`, `grid-template-rows: repeat(3, minmax(44px, 1fr))`, `grid-auto-columns: calc(50% - 3px)` — 6 sessions visible per page (3 rows × 2 cols), horizontal scroll-snap with `scroll-snap-align: start` on every 6th item to land on full pages.
+- `.sidebar .sidebar-spawn` (the dashed full-height block, awkward on mobile) hidden via `display: none` on mobile.
+- New `#mobileSpawnBtn` rendered right after the `.sidebar` div: full-width minus 16px gutters, 44px tall, gradient accent background, hidden on desktop via `@media (min-width: 769px)`.
+- Item content density tuned: 12px name font, 9px pane id, 10px border-radius, 44px min-height (touch).
+- Slim 4px scrollbar on the grid for visual hint of scrollability.
+
+Verified at 390×844 (iPhone): 7 panes render as a 2×2-and-half scrollable grid, scrolling reveals the 7th, slim spawn button below at 359×44px, legacy in-grid spawn block hidden. Desktop @ 1400×900: list back to default block layout, legacy spawn visible, mobile button hidden. 18/18 smoke tests still pass.
+
 ## [2.4.2] - 2026-04-15
 
 ### Mobile hotfix — legacy notification blocked session bar
