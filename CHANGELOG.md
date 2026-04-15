@@ -2,6 +2,55 @@
 
 All notable changes to theorchestra are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.0] - 2026-04-14
+
+### Pivot to HTML dashboard + A2A handoff protocol
+
+After v2.1 the React dashboard was abandoned. v2.2 consolidation was superseded. v2.3 ships the v3.1-aesthetic **HTML dashboard** served from `src/dashboard.html` on :4200 as the canonical frontend.
+
+**v2.3 (commit 1f31259) — compact activity sidebar + handoff UI**
+
+- Right `#activitySidebar` 260px collapsible, 3 stacked panels: OmniClaude monitor (auto-detect pane, 3s refresh), A2A activity (live SSE + `/api/a2a/pending` snapshot), compact Events (one-liner + click-to-expand, filter chips). Replaces the legacy Live Feed that ate 1/3 of screen.
+- Bottom tasks strip 180/32px collapsible with status-colored pills.
+- A2A badges on pane cards (direction-aware).
+- Orphan toasts (slide-in top-right, 30s dedup).
+- Handoff UI: `↗ Handoff` + `📜 History` buttons on every pane card.
+- Backend: `GET /api/a2a/pending` (LRU 500 + 24h TTL), SSE translation layer mapping watcher events to v3.1 contract, `POST /api/a2a/handoff`.
+
+**v2.3.1 (commit e5c0583) — handoff redesign**
+
+- Reversed the handoff flow: the backend does NOT write files or touch the target pane. Instead it sends an **instructive prompt to the SOURCE pane** which authors its own handoff file in its own project's `handoffs/` folder (unique filename, never overwrites) and contacts the target via `mcp__wezbridge__send_prompt` + `send_key('enter')`. Source pane has richest context → author-quality handoffs; every A2A envelope on the wire originates from a legitimate MCP call.
+- UI updated: removed prefilled summary, renamed optional field to "Extra context for <source>", button says "Send to <source>".
+
+**v2.4 (commit 7ef5069) — drag-reorder + arrows + handoff scan + Routines scaffolding**
+
+- Panel drag-to-reorder in right sidebar with localStorage persistence.
+- A2A arrows SVG overlay on Desktop view (pointer-events:none, quadratic Bezier curves between active corr pane pairs, 3 markers color-coded active/resolved/orphaned, orphan pulsing, 10s fade for resolved).
+- Handoff history filesystem cold-start scan: `GET /api/handoffs?pane=N` scans `<cwd>/handoffs/*.md` + parses header metadata; modal merges with in-memory history.
+- Claude Routines integration scaffolding: `src/routines-config.cjs` loader (YAML fenced blocks in `vault/_routines-config.md`, 30s cache), `vault/_routines-config.md.template` skeleton, `POST /api/routines/fire` proxy to `api.anthropic.com/v1/claude_code/routines/:id/fire` with `experimental-cc-routine-2026-04-01` beta header, `fire_routine` action in orchestrator-executor (always escalates, user-gated).
+- React dashboard archived to `tmp/dashboard-react-v2.1/` (gitignored).
+- CLAUDE.md refreshed to describe current surface.
+
+**v2.4 stabilization (commit 3a9c5ca) — CSRF defense**
+
+- All POST endpoints now check the `Origin` header. Same-origin (`http://localhost:4200` / `127.0.0.1:4200`) passes; no-Origin (curl/CLI) passes; cross-origin (evil.com) → 403. GETs unaffected.
+- Closes an open attack vector where a malicious webpage opened in the user's browser could kill panes, inject prompts, or exfiltrate handoffs via zero-auth localhost endpoints.
+
+### Breaking
+
+- `/api/panes/:id/output` now returns `{pane_id, output, lines}` (both fields) — v3.1 HTML reads `data.output`, so if anyone relied on reading only `data.lines`, both are present.
+- `POST /api/a2a/handoff` body changed: `{source_pane, target_pane, instruction, context?}` — v2.3's `summary` field renamed to `context` (optional). Old clients sending `summary` still work via fallback.
+
+### Infra
+
+- Branch consolidation: all legacy branches (clawfleet/*, theorchestra/dashboard-v2.0/v2.1/v2.2, a2a/*) deleted local+remote. Single `main` branch on `github.com/wolverin0/theorchestra` (canonical). `github.com/wolverin0/wezbridge` preserved as `wezbridge-legacy` remote for historical reference.
+
+### Docs
+
+- `docs/PLAN-dashboard-v2.3.md`, `docs/PLAN-dashboard-v2.4-cleanup.md` — ship-plans (closed).
+- `docs/futureroadmap.md` — v2.5 Agency Mode + v2.6+ backlog (not started; gated by v2.4 dog-food week).
+
+
 ## [2.1.0] - 2026-04-14
 
 ### Major — v3.1 visual port + A2A arrows + toasts + sounds
