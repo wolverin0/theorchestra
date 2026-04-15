@@ -703,6 +703,29 @@ function serveStatic(res, urlPath) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+// --- CSRF / cross-origin defense for POST endpoints ---
+//
+// Threat: the dashboard serves on localhost:4200 with zero auth — a malicious
+// website opened in the same browser could POST to /api/panes/:id/kill etc
+// via fetch() and kill panes, inject prompts, exfiltrate handoffs, etc.
+//
+// Browsers ALWAYS send an `Origin` header on cross-origin requests with
+// non-trivial methods (POST with Content-Type: application/json is one).
+// Same-origin requests from our own dashboard HTML set Origin to
+// http://localhost:4200 (or 127.0.0.1:4200). Curl/CLI requests omit Origin
+// entirely — we allow those (no browser = no CSRF vector).
+const ALLOWED_ORIGINS = new Set([
+  `http://localhost:${PORT}`,
+  `http://127.0.0.1:${PORT}`,
+]);
+
+function isOriginAllowed(req) {
+  const origin = req.headers.origin;
+  // No Origin header: non-browser request (curl, node http, etc). Allow.
+  if (!origin) return true;
+  return ALLOWED_ORIGINS.has(origin.toLowerCase());
+}
+
 // --- server ---
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
@@ -716,6 +739,13 @@ const server = http.createServer(async (req, res) => {
       'Access-Control-Allow-Headers': 'Content-Type',
     });
     return res.end();
+  }
+
+  // CSRF defense: reject POSTs with a mismatched Origin. Only state-changing
+  // methods are gated — GETs on the API are idempotent and read-only.
+  if (method === 'POST' && !isOriginAllowed(req)) {
+    log(`CSRF: rejected POST ${pathname} from Origin: ${req.headers.origin}`);
+    return sendJson(res, 403, { error: 'origin not allowed' });
   }
 
   // API routes
