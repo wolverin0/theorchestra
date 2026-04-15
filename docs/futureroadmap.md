@@ -122,6 +122,119 @@ Critical: subagents (Método 2) corren **dentro del mismo proceso del parent** y
 
 ---
 
+## v2.7+ — Claude Code surface area we're NOT using yet (research 2026-04-15)
+
+Investigado vía context7 en `code.claude.com/docs`. Ranqueado por valor real para nuestro flow.
+
+### A) Hooks adicionales (alto impacto, bajo esfuerzo)
+
+Hoy usamos `UserPromptSubmit` (recall + classify) y `SessionStart` (memory inject). La doc oficial expone **9 hook events más**:
+
+| Hook | Uso para wezbridge | Esfuerzo |
+|---|---|---|
+| **`PreToolUse`** | Bloquear MCP calls riesgosos. Ej: rechazar `wezbridge:send_prompt` a un pane en `permission` state sin override explícito; bloquear `kill_session` sin confirmación si el pane tiene tareas activas | 1h |
+| **`PostToolUse`** | Audit trail automático. Cada call a wezbridge MCP se loggea a `vault/_mcp-audit/<date>.jsonl` para forensics | 30 min |
+| **`PostToolUseFailure`** | Re-routing automático. Si `send_prompt` falla porque el pane murió, dispara peer_orphaned manualmente | 30 min |
+| **`PreCompact`** | Salvar estado crítico antes que la compaction lo borre. Ej: serializar `pendingA2A` corrs activos a vault para que sobreviva | 1 h |
+| **`SubagentStart`/`SubagentStop`** | Track subagent activity en el dashboard. Cada vez que un orchestrator pane invoca un subagent vía Agent tool, aparece como evento en el Live Feed | 1-2 h |
+| **`PermissionRequest`** | Capturar todos los `permission` events ANTES que aparezcan al usuario. Auto-aprobar patrones seguros documentados en allowlist | 2 h |
+
+**Hook contract**: stdin recibe JSON con `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`, `tool_name`, `tool_input`. Retorna `{decision: "block", reason: "..."}` para abortar, o vacío para permitir.
+
+### B) Skills custom para nuestro flow (medio impacto, bajo-medio esfuerzo)
+
+Hoy NO shippeamos ningún skill. Skills viven en `~/.claude/skills/<name>/SKILL.md` (user) o `.claude/skills/<name>/SKILL.md` (project), YAML frontmatter + body. Pueden incluir scripts/binarios anidados. Auto-descubiertos por Claude cuando relevante (a menos que `disable-model-invocation: true`, entonces solo el user los invoca).
+
+**Skills propuestos (envío como `.claude/skills/` en el repo de theorchestra):**
+
+```yaml
+---
+name: handoff-pane
+description: Hand off current work to another pane. Use when the user asks to "delegate", "pass to", or "have X take over"
+argument-hint: <target-pane-id> "<instruction>"
+---
+
+# Handoff to pane $ARGUMENTS
+
+1. Identify target pane via `mcp__wezbridge__discover_sessions`
+2. Author handoff file at `<cwd>/handoffs/handoff-to-<target-name>-<ts>-<uuid>.md`
+   summarizing current work + state
+3. Send A2A envelope via `mcp__wezbridge__send_prompt` + `send_key('enter')`
+4. Acknowledge with corr id
+
+Reference: docs/PLAN-dashboard-v2.3.md Phase 4
+```
+
+Otros candidatos: `/spawn-specialist`, `/a2a-status <corr>`, `/dashboard` (abre :4200), `/observe-pane <id>` (Monitor de un pane peer), `/digest-orphans` (resumen de corrs orphaned recientes).
+
+**Importante**: la doc dice "Custom commands have been merged into skills" — `.claude/commands/` y `.claude/skills/X/SKILL.md` ambos crean `/X` y funcionan igual. Empezar con commands (single .md) y promover a skills (folder) cuando necesiten archivos de soporte.
+
+### C) Headless / batch mode (medio impacto, bajo esfuerzo)
+
+`claude -p "<prompt>"` (alias `--print`) corre Claude one-shot sin entrar a interactivo. Flags útiles que NO usamos hoy:
+
+- `--output-format json` — output estructurado parseable
+- `--output-format stream-json` — streaming line-delimited JSON (ideal para bridge a dashboard)
+- `--json-schema <schema>` — Claude valida su output contra un schema antes de retornar
+- `--max-budget-usd <n>` — corta si excede gasto (relevante con persona que pueden divagar)
+- `--max-turns <n>` — limita iteraciones agénticas
+- `--input-format stream-json` — encadenar Claudes (output de uno → input del siguiente)
+
+**Use cases para wezbridge:**
+- Orchestrator pane delega tareas one-shot a Claudes headless en lugar de spawnear panes nuevos (más barato, sin slot WezTerm)
+- Routines del dashboard pueden POST a `/api/routines/fire-local` que internamente hace `claude -p` con un prompt + json-schema → trae resultado estructurado para mostrar
+- CI/CD: `npm run review-pr` corre `claude -p --json-schema` para validar PRs antes de merge
+
+### D) Permission modes (alto valor, ya casi gratis)
+
+Hoy todos los panes corren con `--dangerously-skip-permissions` via `omniclaude-forever.sh`. Eso es sano para el orchestrator pero **no para specialists**.
+
+| Mode | Cuándo |
+|---|---|
+| `default` | Pregunta cada acción riesgosa. Para panes user-facing donde querés review |
+| `plan` | Solo lectura, no edita ni ejecuta. **PERFECTO para specialist "code-reviewer" / "auditor" en Agency Mode** |
+| `acceptEdits` | Auto-aprueba edits, sigue preguntando bash. Para frontend-developer / backend-architect |
+| `bypassPermissions` | Skip-permissions equivalent. Solo para orchestrator + worker |
+
+Implementación trivial: extender `POST /api/spawn` con `permission_mode` opcional, mapear a `--permission-mode <mode>` en el spawn args. Default `bypassPermissions` para mantener comportamiento actual.
+
+Per-project default vía `.claude/settings.json`:
+```json
+{ "permissions": { "defaultMode": "plan" } }
+```
+
+### E) Output styles (bajo impacto, bajo esfuerzo, win cosmético)
+
+Output styles modifican el system prompt de Claude para cambiar TONE/FORMAT. Built-in: default, teaching, etc. Custom: `~/.claude/output-styles/<name>.md` con frontmatter `description` + body que se appendea.
+
+**Use case**: orchestrator pane podría usar un style "terse-json-first" que pida respuestas estructuradas para que el dashboard parsee mejor. Specialist "code-reviewer" podría usar style "report-mode" que siempre devuelve markdown con secciones fijas.
+
+### F) Settings hierarchy (medio impacto, esfuerzo medio)
+
+`--setting-sources user,project,local` — control fino sobre dónde vienen los settings. Hoy mezclamos todo. Útil:
+- Worker pane podría tener `settings.json` propio en `vault/_orchestrator-worker/.claude/` con tools muy restringidos (solo Read/Write a `.state.json` y `.response.json`)
+- Specialists con persona podrían heredar un settings de project distinto al del user
+
+### G) Plugins / channels (research)
+
+`omniclaude-forever.sh` ya usa `--channels plugin:telegram@claude-plugins-official`. Plugins son distribuibles por Anthropic. Investigar si conviene shipear `wezbridge` como plugin propio:
+- Pro: install-once en cualquier máquina con `claude --channels plugin:wezbridge@...`
+- Con: requiere mantener el package en el registry, versioning, etc.
+
+Probably overkill hasta que el proyecto sea estable + de uso público. Por ahora MCP server `npm i -g` en local es suficiente.
+
+### Priorización sugerida cuando se promuevan al backlog real
+
+1. **Hooks PreToolUse + PostToolUse** (A) — 1.5h, gana audit trail + safety inmediato
+2. **Skills `/handoff-pane` + `/spawn-specialist`** (B) — 2h, gana ergonomía masiva (no más click-click-click en dashboard)
+3. **Permission modes per spawn** (D) — 1h, prerrequisito para Agency Mode v2.5
+4. **PreCompact hook** (A) — 1h, defensivo contra pérdida de A2A state
+5. **Headless batch** (C) — 2-3h, abre la puerta a delegación cheap
+
+Total estimado para los 5: ~7-9 horas. Todo opt-in, no rompe lo que ya hay.
+
+---
+
 ## Policy: cómo se agrega acá
 
 1. Cualquier idea de feature grande entra a este archivo PRIMERO
