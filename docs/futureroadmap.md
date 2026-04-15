@@ -116,7 +116,7 @@ Critical: subagents (Método 2) corren **dentro del mismo proceso del parent** y
 - **Pane-to-pane drag handoff**: arrastrar una pane card sobre otra en Desktop view = handoff shortcut visual
 - **Telegram alerts opcional**: portar el bot de `wezbridge-legacy` como plugin opt-in (notificaciones de `completed`/`permission`/`orphaned`)
 - **Actually wire Routines**: primera routine real — "orphan investigator" que se dispara cuando el daemon detecta peer_orphaned repetido, abre PR con diagnóstico
-- **Mobile view** (Telegram Mini App style) — si el user alguna vez quiere controlar desde el celular
+- ~~**Mobile view** (Telegram Mini App style) — si el user alguna vez quiere controlar desde el celular~~ → **SHIPPED en v2.4.1** (Nivel 1 + 2: drawer, bottom nav, swipe gestures, LAN-friendly CSRF). Si se quiere la vista Telegram-native específica del mini app, abrir nuevo item
 - **Multi-project PRDs**: un PRD que spawneá team across several projects (ej: cambio de API que impacta a 3 apps)
 - **Agency memory**: sessions con persona guardan aprendizajes en MemoryMaster con scope `persona:<name>` para persistir conocimiento entre ejecuciones
 

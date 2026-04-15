@@ -2,6 +2,41 @@
 
 All notable changes to theorchestra are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.1] - 2026-04-15
+
+### Mobile responsive + LAN access
+
+Shipped after a brief `dog-food` window when the user accessed the dashboard from a phone and found it usable but cramped. Promoted from `futureroadmap.md` `v2.6+` to shipped, delivered via A2A task T-026.
+
+**Security / LAN access (commit 22a9d14)**
+- CSRF allowlist auto-detects local network interfaces at boot via `os.networkInterfaces()`. localhost + 127.0.0.1 + [::1] + every non-internal IPv4/IPv6 address on PORT. Logged on startup. DHCP rotation requires dashboard restart.
+- Phones/tablets/other devices on the LAN can now hit the dashboard AND make POST actions (kill/spawn/handoff/broadcast) — previously same-origin check only allowed localhost.
+
+**Mobile UX Nivel 1 (commit bdb0054)**
+- Viewport meta already present.
+- `@media (max-width: 768px)` baseline: topbar tighter + horizontally scrollable tab overflow; sessions sidebar flipped to horizontal-scroll pill bar at top of Sessions view; activity sidebar becomes a right-side slide-in drawer (`translateX` with backdrop overlay); tasks strip auto-collapsed with tap-to-expand (bottom-sheet feel); pane cards full-width stacked; spawn project grid single column; Desktop view replaced by a "needs mouse" message on touch devices; modals full-screen; handoff dropdown anchored as bottom action sheet.
+- 44×44 touch targets on sidebar items, buttons, action controls.
+- New `#mobileSidebarToggle` (☰) button + `#mobileSidebarBackdrop` wired in the topbar; hamburger replaces the chevron on mobile.
+- New `isMobile()` / `toggleMobileSidebar()` / `applyMobileDefaults()` JS helpers. Tap-anywhere-on-tasks-strip toggles expand. Resize listener cleans up mobile overlay state when crossing breakpoint back to desktop.
+
+**Mobile UX Nivel 2 (commit d364d67)**
+- Bottom navigation bar (`#bottomNav`, 64px) fixed at viewport bottom on mobile: 4 tabs (Sessions/Live/Desktop/Spawn) with icon + label, accent color for active, glass-blur background. `body { padding-bottom: 64px }` pushes content up. Tasks strip and activity drawer bottom offsets adjusted to 64px so they stack above the nav.
+- Swipe-from-right-edge opens the activity drawer: document-level touchstart/move/end listeners, triggers when gesture starts ≤24px from right edge AND travels ≥50px leftward with horizontal dominance (dx > dy × 1.5). Swipe-right inside the open drawer closes.
+- `#swipeEdgeHint` thin 8px strip on the right edge for discoverability (tap also opens the drawer).
+- `syncBottomNav(view)` updates active state; wraps `window.switchView` as a side-effect without breaking its signature.
+- `@media (min-width: 769px)`: bottom nav + swipe hint hidden. Zero desktop regression, verified at 1400×900.
+
+### Tests
+
+- 18/18 smoke tests still pass (added one: LAN origin from machine's own interfaces passes CSRF gate).
+
+### Verified via Playwright at 390×844 (iPhone 13 Pro viewport)
+
+- Activity drawer slides in on ☰ tap with backdrop; swipe from right edge opens
+- Bottom nav active tab syncs with view, all 4 tabs switch correctly
+- Tasks strip starts collapsed, taps expand to 40vh bottom sheet
+- Resize to desktop clears all mobile overlay state cleanly
+
 ## [2.4.0] - 2026-04-14
 
 ### Pivot to HTML dashboard + A2A handoff protocol
