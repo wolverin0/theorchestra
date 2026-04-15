@@ -2,6 +2,23 @@
 
 All notable changes to theorchestra are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.4.4] - 2026-04-15
+
+### Fix status detection — Unicode ellipsis + "esc to interrupt" (T-060)
+
+Bug reported by user: working panes show as `idle` on the dashboard. Root cause in `src/pane-discovery.cjs` `STATUS_PATTERNS.working` — regex literals like `/\bThinking\.\.\./` require three LITERAL dots (`...`), but modern Claude Code renders `Thinking…` using the Unicode ellipsis character `…` (U+2026). The working check silently fails, the if-elseif chain falls through to `idle` which matches the persistent `❯` prompt still in scrollback → pane reported idle despite being visibly active.
+
+### Fix
+
+- Add `/esc to interrupt/i` — the most reliable signal, shown ONLY during active tool execution. Zero false positives when a pane is actually idle.
+- Add a generalized catch-all `/\b[A-Z][a-z\u00E0-\u00FF]{2,}(ing|ed)\s*(\u2026|\.{3})/` for verb + ellipsis OR three-dots, covering Thinking, Reading, Writing, Editing, Searching, Running, Creating, Analyzing, Implementing, Planning, Cooking, Brewing, Ingesting, Computing, Compiling, Deploying, Sautéing, Sautéed, etc.
+- Keep the original braille spinner regex (still valid) and the `●.*agent` indicator.
+- Remove the old dot-only verb patterns (redundant with the unified catch-all that accepts both `…` and `...`).
+
+### Verified
+
+After restart, pane-10 (wezbridge itself, executing MCP tools during this session) correctly shows `working` where before it showed `idle`. 18/18 smoke tests still pass.
+
 ## [2.4.3] - 2026-04-15
 
 ### Mobile sessions UX — 2×3 grid + slim spawn button (T-059)

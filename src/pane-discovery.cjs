@@ -55,14 +55,23 @@ const STATUS_PATTERNS = {
     /\(press enter\)/i,
   ],
   working: [
-    /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏/,   // Spinner characters (Claude's working indicator)
-    /\bThinking\.\.\./,              // Exact "Thinking..." (not just "thinking" in text)
-    /\bReading\b.*\.\.\./,           // "Reading file..."
-    /\bEditing\b.*\.\.\./,           // "Editing file..."
-    /\bSearching\b.*\.\.\./,         // "Searching..."
-    /\bWriting\b.*\.\.\./,           // "Writing file..."
-    /\bRunning\b.*\.\.\./,           // "Running command..."
-    /●.*agent/i,                      // Agent running indicator
+    // Most reliable signal: Claude Code shows "esc to interrupt" ONLY during
+    // active tool execution / thinking. Zero false positives in idle panes.
+    /esc to interrupt/i,
+    // Braille spinner characters (Claude's animated working indicator)
+    /[\u280B\u2819\u2839\u2838\u283C\u2834\u2826\u2827\u2807\u280F]/,
+    // Verb + ellipsis — modern Claude Code uses Unicode U+2026 (`…`), not
+    // three literal dots. Broad catch-all for any capitalized
+    // present-participle verb + ellipsis/dots:
+    // Thinking… Reading… Writing… Editing… Searching… Running… Creating…
+    // Analyzing… Implementing… Planning… Ingesting… Cooking… Brewing…
+    // Computing… Sautéing… Sautéed… etc.
+    /\b[A-Z][a-z\u00E0-\u00FF]{2,}(ing|ed)\s*(\u2026|\.{3})/,
+    // Named verbs fallback (in case the catch-all misses; keeps pre-2026
+    // patterns working)
+    /\b(Thinking|Reading|Writing|Editing|Searching|Running|Creating|Analyzing|Implementing|Planning|Cooking|Brewing|Ingesting|Computing|Compiling|Deploying)\s*(\u2026|\.{3})/i,
+    // Agent running indicator (● bullet preceding "agent" mention)
+    /\u25CF.*agent/i,
   ],
 };
 
