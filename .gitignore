@@ -39,3 +39,5 @@ dashboard/dist/
 dashboard/node_modules/
 tmp/dashboard-react-v2.1/
 tmp/dashboard-cjs-legacy/
+tmp/legacy-root/
+tmp/screenshots/
