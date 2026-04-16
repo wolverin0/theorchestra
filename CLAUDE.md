@@ -1,10 +1,12 @@
-# theorchestra / wezbridge (v2.3+)
+# theorchestra / wezbridge (v2.5)
 
-A proactive orchestrator for multiple Claude Code + Codex sessions running in WezTerm panes, plus a browser dashboard to steer them.
+A proactive orchestrator for multiple Claude Code + Codex sessions running in WezTerm panes, plus a browser dashboard to steer them. Now with **Agency Mode**: spawn persona-specialized Claude agents that coordinate via A2A.
 
 ## What this is (current shipping surface)
 
-**Dashboard** — `src/dashboard-server.cjs` runs on port 4200 and serves `src/dashboard.html` (single-file vanilla-JS HTML, v3.1 FuturaOS look, v2.3 features on top). The HTML is the canonical frontend; the React folder at `tmp/dashboard-react-v2.1/` is archived legacy.
+**Dashboard** — `src/dashboard-server.cjs` runs on port 4200 and serves `src/dashboard.html` (single-file vanilla-JS HTML, v3.1 FuturaOS look, v2.4 features on top). The HTML is the canonical frontend; the React folder at `tmp/dashboard-react-v2.1/` is archived legacy.
+
+**Agency Mode (v2.5)** — spawn Claude sessions with domain-specific personas from `~/.claude/agents/` (95+ available). `POST /api/spawn {cwd, persona: "reviewer", permission_mode: "plan"}` creates a fresh session with the persona's system prompt appended. The MCP tool `spawn_session` supports the same params. `GET /api/personas` lists available personas. Pane discovery detects persona from tab title `[persona-name]`.
 
 The dashboard has 4 tabs (Sessions, Live, Desktop, Spawn), a right activity sidebar with 3 collapsible + reorderable panels (OmniClaude monitor, A2A activity, compact Events), and a bottom Active Tasks strip. See v2.3 plan: `docs/PLAN-dashboard-v2.3.md`.
 
@@ -128,9 +130,9 @@ Vault:
 
 ## Legacy notes
 
-- The old Omni-pane mechanism (`omniPaneId`, `OM` badge, NOTIFICATION text injection) was removed in v4.
-- `src/terminal-orchestrator.cjs` + `src/orchestrator-cli.cjs` + `src/shared-tasks.cjs` are an orthogonal legacy team-based system, left in the repo but not used by the dashboard daemon. Will be deprecated.
-- `src/mcp-server.cjs` exposes MCP tools for manual control from any other Claude Code session — still supported, untouched by v4.
+- The old Omni-pane mechanism (`omniPaneId`, `OM` badge, NOTIFICATION text injection) was removed.
+- Legacy files from the original wezbridge monolith (~25 files: terminal-orchestrator, session-manager, telegram-bot, webapp, etc.) have been archived to `tmp/legacy-src/`. They are NOT part of the current codebase.
+- `src/mcp-server.cjs` exposes MCP tools for manual control from any other Claude Code session — still supported.
 
 ## When NOT to be the orchestrator worker
 
