@@ -187,6 +187,27 @@ code, pre, .mono { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace
 .proj-card-path { font-size: 10px; color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-card-badge { font-size: 10px; color: var(--green); font-weight: 600; margin-top: 4px; }
 
+/* ─── Persona badges ─── */
+.persona-badge {
+  display: inline-block; font-size: 9px; font-weight: 600;
+  padding: 1px 6px; border-radius: 10px; margin-left: 4px;
+  background: oklch(0.65 0.24 270 / 0.2); color: var(--accent);
+  text-transform: uppercase; letter-spacing: 0.3px;
+  vertical-align: middle;
+}
+/* ─── Spawn persona/perm dropdowns ─── */
+.spawn-select {
+  font-family: 'Inter', sans-serif; font-size: 12px;
+  background: var(--bg-surface); color: var(--text-primary);
+  border: 1px solid var(--border-subtle); border-radius: 6px;
+  padding: 5px 8px; height: 32px; cursor: pointer;
+  outline: none; transition: border-color 0.2s;
+}
+.spawn-select:focus { border-color: var(--accent); }
+.spawn-select option, .spawn-select optgroup {
+  background: var(--bg-surface); color: var(--text-primary);
+}
+
 /* ─── Live Feed ─── */
 .feed-panel { display: none; flex: 1; flex-direction: column; gap: 0; overflow-y: auto; }
 .feed-panel.open { display: flex; }
@@ -463,6 +484,14 @@ code, pre, .mono { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace
   /* Spawn view: project grid → single column */
   .proj-grid { grid-template-columns: 1fr !important; }
   .proj-card { padding: 14px; min-height: 60px; }
+
+  /* Spawn persona/perm dropdowns — full-width stacked on mobile */
+  #spawnPersonaRow {
+    flex-direction: column !important; gap: 6px !important;
+  }
+  #spawnPersonaRow .spawn-select {
+    width: 100% !important; min-height: 44px; font-size: 14px;
+  }
 
   /* Desktop view: touch doesn't play well with react-rnd. Block + message. */
   #desktopView.open::before {
@@ -1009,6 +1038,17 @@ code, pre, .mono { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace
       <label style="font-size:12px;display:flex;align-items:center;gap:4px;color:var(--text-secondary);cursor:pointer"><input type="checkbox" id="spawnYolo" checked> --skip-perms</label>
       <button class="btn btn-accent" onclick="spawnCustom()">Spawn</button>
     </div>
+    <div id="spawnPersonaRow" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+      <select id="spawnPersona" class="spawn-select" style="min-width:220px;flex:1">
+        <option value="">No persona (generic Claude)</option>
+      </select>
+      <select id="spawnPermMode" class="spawn-select" style="min-width:160px">
+        <option value="" selected>bypass (default)</option>
+        <option value="plan">plan (read-only)</option>
+        <option value="acceptEdits">acceptEdits (auto-approve edits)</option>
+        <option value="default">default (ask everything)</option>
+      </select>
+    </div>
     <div id="folderBrowser" style="margin-bottom:10px;padding:8px 12px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;font-size:12px">
       <div id="browseHeader" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;flex-wrap:wrap"></div>
       <div id="browseDirs" style="display:flex;flex-wrap:wrap;gap:4px;max-height:120px;overflow-y:auto"></div>
@@ -1136,6 +1176,7 @@ function switchView(view) {
   document.getElementById('spawnView').classList.toggle('open', view === 'spawn');
   document.getElementById('sidebar').style.display = view === 'desktop' ? 'none' : '';
   if (view === 'spawn' && !projectsLoaded) loadProjects();
+  if (view === 'spawn' && !personasLoaded) loadPersonas();
   if (view === 'desktop') initDesktop();
 }
 
@@ -1490,6 +1531,40 @@ async function loadProjects() {
   }
 }
 
+var personasLoaded = false;
+async function loadPersonas() {
+  const sel = document.getElementById('spawnPersona');
+  if (!sel) return;
+  try {
+    const r = await fetch(API + '/api/personas');
+    if (!r.ok) return;
+    const personas = await r.json();
+    personasLoaded = true;
+    // Clear old options except the default
+    sel.innerHTML = '<option value="">No persona (generic Claude)</option>';
+    // Group by category
+    const groups = {};
+    personas.forEach(function(p) {
+      const cat = p.category || p.type || 'other';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(p);
+    });
+    Object.keys(groups).sort().forEach(function(cat) {
+      const optgroup = document.createElement('optgroup');
+      optgroup.label = cat;
+      groups[cat].forEach(function(p) {
+        const opt = document.createElement('option');
+        opt.value = p.name;
+        var desc = (p.description || '').substring(0, 50);
+        opt.textContent = p.name + (desc ? ' \u2014 ' + desc : '');
+        optgroup.appendChild(opt);
+      });
+      sel.appendChild(optgroup);
+    });
+  } catch {
+    // Silently fail — personas are optional
+  }
+}
 
 // ─── Folder Browser ───
 var browsePath = '';
@@ -1536,9 +1611,13 @@ function loadSpawnPrefs(projectName) {
 }
 
 function getSpawnOpts() {
+  var persona = document.getElementById('spawnPersona');
+  var permMode = document.getElementById('spawnPermMode');
   return {
     continue_session: document.getElementById('spawnContinue').checked,
     yolo: document.getElementById('spawnYolo').checked,
+    persona: persona ? persona.value : '',
+    permission_mode: permMode ? permMode.value : '',
   };
 }
 
@@ -1548,11 +1627,14 @@ async function spawnProject(cwd) {
   try {
     const r = await fetch(API + '/api/spawn', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      body: JSON.stringify(Object.assign({
         cwd: cwd,
         'continue': opts.continue_session,
         yolo: opts.yolo,
-      }),
+      },
+        opts.persona ? { persona: opts.persona } : {},
+        opts.permission_mode ? { permission_mode: opts.permission_mode } : {}
+      )),
     });
     const data = await r.json();
     if (data.pane_id !== undefined) {
@@ -2880,6 +2962,7 @@ renderSidebar = function() {
     return '<div class="sidebar-item ' + active + '" data-pane="' + s.pane_id + '" onclick="selectSession(' + s.pane_id + ')">' +
       '<div class="dot ' + esc(s.status) + '"></div>' +
       '<span class="sidebar-item-name">' + esc(s.project_name || 'pane ' + s.pane_id) + '</span>' +
+      (s.persona ? '<span class="persona-badge">' + esc(s.persona) + '</span>' : '') +
       '<span class="sidebar-item-a2a"></span>' +
       '<span class="sidebar-item-pane">' + s.pane_id + '</span>' +
       '<div class="sidebar-item-extras">' +
@@ -2905,6 +2988,13 @@ dtCreateWin = function(s) {
   slot.className = 'dwin-a2a-slot';
   slot.style.cssText = 'display:inline-flex;gap:3px;align-items:center';
   if (nameEl && nameEl.parentNode) nameEl.parentNode.insertBefore(slot, nameEl.nextSibling);
+  // Persona badge in Desktop window header
+  if (s.persona) {
+    const badge = document.createElement('span');
+    badge.className = 'persona-badge';
+    badge.textContent = s.persona;
+    if (nameEl && nameEl.parentNode) nameEl.parentNode.insertBefore(badge, slot.nextSibling);
+  }
   const hbtn = document.createElement('button');
   hbtn.className = 'handoff-btn';
   hbtn.textContent = '↗ Handoff';

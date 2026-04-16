@@ -20,7 +20,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const wez = require('./wezterm.cjs');
 const { discoverPanes } = require('./pane-discovery.cjs');
 const routinesConfig = require('./routines-config.cjs');
@@ -179,6 +179,10 @@ const a2aState = new Map();
 const A2A_MAX = 500;
 const A2A_TTL_MS = 24 * 3600 * 1000;
 const A2A_ENVELOPE_RE = /\[A2A from pane-(\d+) to pane-(\d+) \| corr=([^\s|]+) \| type=(\w+)/g;
+
+// --- Worktree registry (Phase 3 — Agency Mode) ---
+// Map<paneId, {persona, worktreePath, branchName, baseCwd}>
+const worktreeRegistry = new Map();
 
 function a2aEvict() {
   const now = Date.now();
@@ -492,7 +496,18 @@ async function handlePostKey(req, res, paneId) {
 async function handlePostKill(res, paneId) {
   try {
     wez.killPane(paneId);
-    sendJson(res, 200, { ok: true, pane_id: paneId });
+    // Auto-cleanup worktree if this pane had one
+    const wt = worktreeRegistry.get(paneId);
+    if (wt) {
+      try {
+        execSync(`git -C "${wt.baseCwd.replace(/\\/g, '/')}" worktree remove "${wt.worktreePath}" --force`, { timeout: 15000, encoding: 'utf8' });
+      } catch (e) { log(`worktree auto-cleanup remove failed for pane ${paneId}: ${e.message}`); }
+      try {
+        execSync(`git -C "${wt.baseCwd.replace(/\\/g, '/')}" branch -d "${wt.branchName}"`, { timeout: 15000, encoding: 'utf8' });
+      } catch { /* branch not merged — expected, not an error */ }
+      worktreeRegistry.delete(paneId);
+    }
+    sendJson(res, 200, { ok: true, pane_id: paneId, worktree_cleaned: !!wt });
   } catch (err) {
     sendJson(res, 500, { error: err.message });
   }
@@ -602,7 +617,7 @@ async function handleGetPersonas(req, res) {
 async function handlePostSpawn(req, res) {
   try {
     const body = await parseBody(req);
-    const { cwd, program } = body;
+    let { cwd, program } = body;
     if (!cwd) return sendJson(res, 400, { error: 'missing `cwd` body field' });
 
     // Build spawn args
@@ -621,6 +636,27 @@ async function handlePostSpawn(req, res) {
     const validModes = ['default', 'plan', 'acceptEdits', 'bypassPermissions'];
     if (body.permission_mode && validModes.includes(body.permission_mode)) {
       spawnArgs.push('--permission-mode', body.permission_mode);
+    }
+
+    // Worktree creation (v2.5 Phase 3)
+    let worktreeInfo = null;
+    if (body.worktree === true) {
+      try {
+        execSync(`git -C "${cwd.replace(/\\/g, '/')}" rev-parse --git-dir`, { timeout: 15000, encoding: 'utf8' });
+      } catch {
+        return sendJson(res, 400, { error: 'not a git repo — cannot create worktree' });
+      }
+      const shortId = Math.random().toString(36).slice(2, 8).padEnd(6, '0').slice(0, 6);
+      const agentSlug = personaName || 'agent';
+      const branchName = `claude/agency-${agentSlug}-${shortId}`;
+      const worktreePath = path.join(cwd, '.worktrees', `${agentSlug}-${shortId}`).replace(/\\/g, '/');
+      try {
+        execSync(`git -C "${cwd.replace(/\\/g, '/')}" worktree add "${worktreePath}" -b "${branchName}"`, { timeout: 15000, encoding: 'utf8' });
+      } catch (gitErr) {
+        return sendJson(res, 500, { error: `git worktree add failed: ${gitErr.message}` });
+      }
+      cwd = worktreePath;
+      worktreeInfo = { path: worktreePath, branch: branchName, baseCwd: body.cwd };
     }
 
     // Spawn the shell pane first (no program — just a shell)
@@ -653,7 +689,81 @@ async function handlePostSpawn(req, res) {
       try { wez.setTabTitle(paneId, `[${personaName}]`); } catch { /* best effort */ }
     }
 
-    sendJson(res, 200, { ok: true, pane_id: paneId, persona: personaName || null });
+    // Register worktree in the in-memory registry
+    if (worktreeInfo) {
+      worktreeRegistry.set(paneId, {
+        persona: personaName || 'agent',
+        worktreePath: worktreeInfo.path,
+        branchName: worktreeInfo.branch,
+        baseCwd: worktreeInfo.baseCwd,
+      });
+    }
+
+    const response = { ok: true, pane_id: paneId, persona: personaName || null };
+    if (worktreeInfo) response.worktree = { path: worktreeInfo.path, branch: worktreeInfo.branch };
+    sendJson(res, 200, response);
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+// --- worktree endpoints (v2.5 Phase 3) ---
+
+async function handleGetWorktrees(req, res) {
+  try {
+    const worktrees = Array.from(worktreeRegistry.entries()).map(([paneId, wt]) => ({
+      paneId,
+      persona: wt.persona,
+      worktreePath: wt.worktreePath,
+      branchName: wt.branchName,
+      baseCwd: wt.baseCwd,
+    }));
+    sendJson(res, 200, { worktrees });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+async function handlePostWorktreeCleanup(req, res, paneId) {
+  try {
+    const wt = worktreeRegistry.get(paneId);
+    if (!wt) return sendJson(res, 404, { error: `pane ${paneId} has no registered worktree` });
+    try {
+      execSync(`git -C "${wt.baseCwd.replace(/\\/g, '/')}" worktree remove "${wt.worktreePath}" --force`, { timeout: 15000, encoding: 'utf8' });
+    } catch (e) {
+      return sendJson(res, 500, { error: `worktree remove failed: ${e.message}` });
+    }
+    try {
+      execSync(`git -C "${wt.baseCwd.replace(/\\/g, '/')}" branch -d "${wt.branchName}"`, { timeout: 15000, encoding: 'utf8' });
+    } catch { /* branch not merged — soft delete fails, that is OK */ }
+    const removed = wt.worktreePath;
+    const branch = wt.branchName;
+    worktreeRegistry.delete(paneId);
+    sendJson(res, 200, { ok: true, removed, branch });
+  } catch (err) {
+    sendJson(res, 500, { error: err.message });
+  }
+}
+
+async function handlePostWorktreeMerge(req, res, paneId) {
+  try {
+    const wt = worktreeRegistry.get(paneId);
+    if (!wt) return sendJson(res, 404, { error: `pane ${paneId} has no registered worktree` });
+    try {
+      const stdout = execSync(`git -C "${wt.baseCwd.replace(/\\/g, '/')}" merge "${wt.branchName}" --no-edit`, { timeout: 15000, encoding: 'utf8' });
+      sendJson(res, 200, { ok: true, merged: wt.branchName, stats: stdout.trim() });
+    } catch (mergeErr) {
+      const output = String(mergeErr.stdout || '') + String(mergeErr.stderr || '');
+      if (output.includes('CONFLICT') || output.includes('Merge conflict')) {
+        const conflictLines = output.split('\n').filter(l => l.includes('CONFLICT'));
+        const files = conflictLines.map(l => {
+          const m = l.match(/CONFLICT.*?:\s*(?:Merge conflict in\s+)?(.+)/);
+          return m ? m[1].trim() : l.trim();
+        });
+        return sendJson(res, 200, { ok: false, conflicts: true, files });
+      }
+      return sendJson(res, 500, { error: `merge failed: ${mergeErr.message}` });
+    }
   } catch (err) {
     sendJson(res, 500, { error: err.message });
   }
@@ -939,9 +1049,18 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/handoffs' && method === 'GET') return handleGetHandoffs(req, res, url.searchParams.get('pane'));
   if (pathname === '/api/routines/fire' && method === 'POST') return handlePostRoutinesFire(req, res);
   if (pathname === '/api/personas' && method === 'GET') return handleGetPersonas(req, res);
+  if (pathname === '/api/worktrees' && method === 'GET') return handleGetWorktrees(req, res);
   if (pathname === '/api/tasks' && method === 'GET') return handleGetTasks(res);
   if (pathname === '/api/events' && method === 'GET') return handleEvents(req, res);
   if (pathname === '/api/spawn' && method === 'POST') return handlePostSpawn(req, res);
+
+  // Worktree action routes: /api/worktrees/:paneId/cleanup and /api/worktrees/:paneId/merge
+  const wtMatch = pathname.match(/^\/api\/worktrees\/(\d+)\/(cleanup|merge)$/);
+  if (wtMatch && method === 'POST') {
+    const wtPaneId = parseInt(wtMatch[1], 10);
+    if (wtMatch[2] === 'cleanup') return handlePostWorktreeCleanup(req, res, wtPaneId);
+    if (wtMatch[2] === 'merge') return handlePostWorktreeMerge(req, res, wtPaneId);
+  }
 
   const paneMatch = pathname.match(/^\/api\/(panes|sessions)\/(\d+)(\/(output|prompt|key|kill|queue|inject-context))?$/);
   if (paneMatch) {

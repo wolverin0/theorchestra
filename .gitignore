@@ -19,6 +19,9 @@ active_tasks.md
 local-biz-sites/
 elchori.md
 
+# Git worktrees (Agency Mode — each agent gets its own branch)
+.worktrees/
+
 # Editor / OS junk
 .vscode/
 .idea/
