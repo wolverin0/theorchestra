@@ -145,24 +145,52 @@ function wezCmd(args, opts = {}) {
   }
 }
 
-/** List all panes with metadata */
+// In-process cache for listPanes(). Added 2026-04-19 to reduce wezterm CLI
+// call rate — multiple services (dashboard, streamer, watcher, mcp-server)
+// often call listPanes() within milliseconds of each other. Each call was
+// spawning a fresh `wezterm cli list` process. With a short TTL the burst
+// gets deduped to a single actual CLI call. Cuts steady-state CLI-spawn
+// rate by ~5-10x and correspondingly reduces 10054 error-log risk.
+let _listPanesCache = null;
+let _listPanesCacheTime = 0;
+const LIST_PANES_TTL_MS = 3000;
 function listPanes() {
-  const raw = wezCmd(['list', '--format', 'json']);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // Fallback: parse the text table
-    const lines = raw.split('\n').filter(l => l.trim());
-    if (lines.length < 2) return [];
-    const headers = lines[0].toLowerCase().split(/\s+/);
-    return lines.slice(1).map(line => {
-      const cols = line.split(/\s+/);
-      const obj = {};
-      headers.forEach((h, i) => { obj[h] = cols[i]; });
-      return obj;
-    });
+  const now = Date.now();
+  if (_listPanesCache !== null && (now - _listPanesCacheTime) < LIST_PANES_TTL_MS) {
+    return _listPanesCache;
   }
+  const raw = wezCmd(['list', '--format', 'json']);
+  let result;
+  if (!raw) {
+    result = [];
+  } else {
+    try {
+      result = JSON.parse(raw);
+    } catch {
+      // Fallback: parse the text table
+      const lines = raw.split('\n').filter(l => l.trim());
+      if (lines.length < 2) {
+        result = [];
+      } else {
+        const headers = lines[0].toLowerCase().split(/\s+/);
+        result = lines.slice(1).map(line => {
+          const cols = line.split(/\s+/);
+          const obj = {};
+          headers.forEach((h, i) => { obj[h] = cols[i]; });
+          return obj;
+        });
+      }
+    }
+  }
+  _listPanesCache = result;
+  _listPanesCacheTime = now;
+  return result;
+}
+
+/** Invalidate the listPanes cache — call after a mutation (spawn/kill/split). */
+function invalidateListPanesCache() {
+  _listPanesCache = null;
+  _listPanesCacheTime = 0;
 }
 
 /** Ensure a visible WezTerm GUI is connected to the mux. */
@@ -237,6 +265,8 @@ function spawnPane({ cwd, program, args: spawnArgs, splitFrom, splitDirection } 
   }
 
   const paneId = wezCmd(cmdArgs);
+  // New pane exists — next listPanes() must fetch fresh data
+  invalidateListPanesCache();
   return parseInt(paneId, 10);
 }
 
@@ -272,14 +302,50 @@ function sendTextNoEnter(paneId, text) {
   });
 }
 
+// Per-pane text cache added 2026-04-19. getFullText is called from 3+ services
+// (telegram-streamer, omni-watcher, dashboard handlers) — bursts where all
+// three read the same pane within ms are common. TTL 1.5s dedups those bursts
+// to one actual `wezterm cli get-text` call. Shorter TTL than listPanes
+// because pane text changes faster than pane list; 1.5s keeps "live" feel
+// while killing the burst amplification.
+const _getTextCache = new Map(); // key = `${paneId}:${lines}` → { text, ts }
+const GET_TEXT_TTL_MS = 1500;
+const GET_TEXT_CACHE_MAX = 50; // prevent unbounded growth if many panes
+
+function _cachedGetText(paneId, lines) {
+  const key = `${paneId}:${lines}`;
+  const now = Date.now();
+  const hit = _getTextCache.get(key);
+  if (hit && (now - hit.ts) < GET_TEXT_TTL_MS) return hit.text;
+  const text = wezCmd(['get-text', '--pane-id', String(paneId), '--start-line', String(-lines)]);
+  // Evict oldest entries if cache full
+  if (_getTextCache.size >= GET_TEXT_CACHE_MAX) {
+    const oldest = [..._getTextCache.keys()][0];
+    _getTextCache.delete(oldest);
+  }
+  _getTextCache.set(key, { text, ts: now });
+  return text;
+}
+
 /** Read the visible text from a pane. */
 function getText(paneId) {
-  return wezCmd(['get-text', '--pane-id', String(paneId)]);
+  return _cachedGetText(paneId, 500);
 }
 
 /** Read full scrollback from a pane (up to N lines back). */
 function getFullText(paneId, scrollbackLines = 500) {
-  return wezCmd(['get-text', '--pane-id', String(paneId), '--start-line', String(-scrollbackLines)]);
+  return _cachedGetText(paneId, scrollbackLines);
+}
+
+/** Invalidate getText cache for a specific pane — call on kill/clear. */
+function invalidateGetTextCache(paneId) {
+  if (paneId === undefined) {
+    _getTextCache.clear();
+    return;
+  }
+  for (const key of _getTextCache.keys()) {
+    if (key.startsWith(`${paneId}:`)) _getTextCache.delete(key);
+  }
 }
 
 /** Kill a pane. */
@@ -289,6 +355,9 @@ function killPane(paneId) {
   } catch {
     // Pane may already be dead
   }
+  // Mutation — invalidate both caches so the next read reflects reality
+  invalidateListPanesCache();
+  invalidateGetTextCache(paneId);
 }
 
 /** Activate (focus) a pane. */
@@ -319,6 +388,7 @@ function splitHorizontal(paneId, { cwd, program, args: spawnArgs } = {}) {
     if (spawnArgs) cmdArgs.push(...spawnArgs);
   }
   const newId = wezCmd(cmdArgs);
+  invalidateListPanesCache();
   return parseInt(newId, 10);
 }
 
@@ -333,6 +403,7 @@ function splitVertical(paneId, { cwd, program, args: spawnArgs } = {}) {
     if (spawnArgs) cmdArgs.push(...spawnArgs);
   }
   const newId = wezCmd(cmdArgs);
+  invalidateListPanesCache();
   return parseInt(newId, 10);
 }
 
@@ -382,6 +453,7 @@ function spawnInWorkspace(workspace, { cwd, program, args: spawnArgs } = {}) {
     if (spawnArgs) cmdArgs.push(...spawnArgs);
   }
   const paneId = wezCmd(cmdArgs);
+  invalidateListPanesCache();
   return parseInt(paneId, 10);
 }
 
@@ -396,6 +468,7 @@ function spawnSshDomain(domainName, { cwd, program, args: spawnArgs } = {}) {
     if (spawnArgs) cmdArgs.push(...spawnArgs);
   }
   const paneId = wezCmd(cmdArgs);
+  invalidateListPanesCache();
   return parseInt(paneId, 10);
 }
 
@@ -418,4 +491,6 @@ module.exports = {
   spawnInWorkspace,
   spawnSshDomain,
   WEZTERM,
+  invalidateListPanesCache,
+  invalidateGetTextCache,
 };
