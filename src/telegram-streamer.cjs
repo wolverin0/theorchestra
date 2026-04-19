@@ -27,12 +27,27 @@ const os = require('os');
 const https = require('https');
 
 // --- Config ---
-const POLL_INTERVAL_MS = 5000;        // 5s between polls
+// Bumped 5s → 10s on 2026-04-19 as part of wezterm CLI call-rate reduction.
+// Combined with wezterm.cjs listPanes/getFullText TTL caches, this cuts
+// steady-state wezterm CLI spawn rate roughly in half per pane per minute.
+const POLL_INTERVAL_MS = parseInt(process.env.STREAMER_POLL_MS || '10000', 10);
 const MIN_EDIT_INTERVAL_MS = 8000;    // Min 8s between edits per pane (Telegram rate limit)
 const LIVE_LINES = 40;                 // Show last 40 lines
 const MAX_HTML_LENGTH = 4050;          // Telegram 4096 minus overhead
 const ERROR_LIMIT = 3;                 // Stop streaming pane after 3 consecutive errors
 const HEARTBEAT_MS = 300000;           // 5 min heartbeat to stdout
+// Streamer mode:
+//   'raw'    = [DEFAULT] one edit-in-place message per project, dumps last
+//              LIVE_LINES of scrollback verbatim. User confirmed this is the
+//              most useful format — captures tables, checklists, reports
+//              inline (card format was too terse; events format scrolled).
+//   'card'   = structured digest (Ctx, Now, Commits, Actions, Errors, A2A).
+//              Too compressed for sessions with rich output. Opt-in only.
+//   'events' = one message per meaningful event, thread. Scrolls on every
+//              new event. Opt-in only.
+const STREAMER_MODE = (process.env.STREAMER_MODE || 'raw').toLowerCase();
+const EVENT_MIN_INTERVAL_MS = 10000;   // Min 10s between event posts per project — Telegram group limit is ~1 msg/sec shared across threads, 10s per project × 10 projects ≈ safe
+const EVENT_SCROLLBACK_LINES = 120;    // How many tail lines to scan for events each poll
 
 // --- State ---
 const streams = new Map(); // project -> { lastHash, lastSentAt, messageId, errorCount }
@@ -391,11 +406,26 @@ function telegramPost(method, body) {
       let buf = '';
       res.on('data', c => buf += c);
       res.on('end', () => {
-        try { resolve(JSON.parse(buf)); }
-        catch { resolve({ ok: false, description: 'parse error' }); }
+        try {
+          const parsed = JSON.parse(buf);
+          // Synthesize description when Telegram returns ok:false without one
+          // (happens on 400 "message is not modified" + other bare rejections).
+          // Preserves error_code + http status for debugging the empty-error bug.
+          if (parsed && parsed.ok === false && !parsed.description) {
+            parsed.description = `http ${res.statusCode} error_code=${parsed.error_code || 'unknown'} raw=${buf.slice(0, 300).replace(/\s+/g, ' ')}`;
+          }
+          // TEMPORARY DEBUG: also log raw buf on any non-ok response so we
+          // can confirm what Telegram is actually returning.
+          if (parsed && parsed.ok === false) {
+            process.stderr.write(`[telegram-streamer-debug] ${method} ok:false http=${res.statusCode} buf=${buf.slice(0, 300).replace(/\s+/g, ' ')}\n`);
+          }
+          resolve(parsed);
+        } catch {
+          resolve({ ok: false, description: `parse error: http ${res.statusCode} body=${buf.slice(0, 200).replace(/\s+/g, ' ')}` });
+        }
       });
     });
-    req.on('error', (e) => resolve({ ok: false, description: e.message }));
+    req.on('error', (e) => resolve({ ok: false, description: `network error: ${e.message}` }));
     req.write(data);
     req.end();
   });
@@ -533,8 +563,309 @@ function buildLiveHtml(project, paneId, rawText, startTime, paneLabel) {
   return html;
 }
 
+// --- Structured status card (STREAMER_MODE=card, DEFAULT) ---
+// Extracts meaningful sections from scrollback and formats them as a digest.
+// Edits the SAME message each poll (no scroll churn in Telegram UI).
+function extractSections(rawText) {
+  const tail = rawText.split('\n').slice(-200).join('\n');
+  const sections = { commits: [], tools: [], errors: [], a2as: [], current: '', ctx: '?', reset: '' };
+
+  // Commits: "[branch abc1234] message"
+  const seenShas = new Set();
+  for (const m of tail.matchAll(/\[([\w\/-]+)\s+([a-f0-9]{7,})\]\s+(.+?)(?=\n|$)/g)) {
+    if (seenShas.has(m[2])) continue;
+    seenShas.add(m[2]);
+    sections.commits.push({ sha: m[2].slice(0, 7), msg: m[3].trim().replace(/\s+/g, ' ').slice(0, 90) });
+  }
+  sections.commits = sections.commits.slice(-3);
+
+  // File-mod tools (Edit/Write/MultiEdit)
+  for (const m of tail.matchAll(/^●\s+(Edit|Write|MultiEdit)\(([^\n)]{0,100})\)?/gm)) {
+    sections.tools.push({ tool: m[1], arg: m[2].trim().replace(/\s+/g, ' ').slice(0, 70) });
+  }
+  // High-signal Bash only (git commit/push/tag, docker, npm test, go test, make)
+  for (const m of tail.matchAll(/^●\s+Bash\(([^\n)]{0,100})/gm)) {
+    const arg = m[1].trim().replace(/\s+/g, ' ');
+    if (!/\b(git\s+(commit|push|tag|rebase|merge|reset\s+--hard)|docker\s+compose|npm\s+(run|test|build)|npx\s+run|go\s+test|cargo\s+(test|build)|pnpm\s+(run|test|build)|make\s+\w+)\b/i.test(arg)) continue;
+    sections.tools.push({ tool: 'Bash', arg: arg.slice(0, 70) });
+  }
+  sections.tools = sections.tools.slice(-4);
+
+  // Errors (excluding streamer's own noise)
+  for (const m of tail.matchAll(/^(.{0,40}(?:ERROR|Exception|FATAL|FAIL):\s*.{0,150})/gm)) {
+    const line = m[1].trim().replace(/\s+/g, ' ');
+    if (/Edit failed for|Send failed for|Stop hook error|Event (poll|send) (error|fail)/.test(line)) continue;
+    sections.errors.push(line.slice(0, 140));
+  }
+  sections.errors = sections.errors.slice(-2);
+
+  // A2A envelopes — last 2
+  for (const m of tail.matchAll(/\[A2A from pane-(\d+) to pane-(\d+) \| corr=([^\s|]+) \| type=(\w+)\]/g)) {
+    sections.a2as.push({ from: m[1], to: m[2], corr: m[3].slice(0, 40), type: m[4] });
+  }
+  sections.a2as = sections.a2as.slice(-2);
+
+  // "Current activity" — last meaningful line (● bullet, ✻/✢/* thinking indicator)
+  const lines = tail.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (/^Model:|^Session:|^Ctx:|^cwd:|^Reset:|bypass permissions|auto mode on|plan mode on|new task\? \/clear/.test(l)) continue;
+    if (/^Found \d+ setting/.test(l)) continue;
+    if (/^[─│]+/.test(l)) continue;
+    if (/^❯\s*$/.test(l)) continue;
+    if (/^⎿\s/.test(l)) continue;
+    // Thinking indicator: ✻ Brewing... / ✢ Levitating... / * Processing...
+    if (/^[✻✢*]\s/.test(l)) { sections.current = l.replace(/[…·]/g, '').slice(0, 140); break; }
+    // Tool/result bullet
+    if (/^[●◉◎]\s/.test(l)) { sections.current = l.slice(0, 140); break; }
+    // Any other substantive text
+    if (l.length > 3) { sections.current = l.slice(0, 140); break; }
+  }
+  if (!sections.current) sections.current = '(idle)';
+
+  // Stats from the status bar
+  const ctxM = rawText.match(/Ctx:\s*(\d+(?:\.\d+)?)%/);
+  if (ctxM) sections.ctx = `${Math.round(parseFloat(ctxM[1]))}%`;
+  const resetM = rawText.match(/Reset:\s*([^\s]+(?:\s\d+m)?)/);
+  if (resetM) sections.reset = resetM[1];
+
+  return sections;
+}
+
+function buildCardHtml(project, paneLabel, rawText) {
+  const s = extractSections(rawText);
+  const parts = [];
+  const stats = [`Ctx ${s.ctx}`];
+  if (s.reset) stats.push(`reset ${s.reset}`);
+  parts.push(`<b>📌 ${escapeHtml(project)}</b> <code>${escapeHtml(paneLabel)}</code>`);
+  parts.push(`<i>${stats.join(' · ')}</i>`);
+  parts.push('');
+  parts.push(`<b>⚡ Now:</b> ${escapeHtml(s.current)}`);
+
+  if (s.commits.length) {
+    parts.push('');
+    parts.push('<b>📝 Commits</b>');
+    for (const c of s.commits) {
+      parts.push(`  • <code>${escapeHtml(c.sha)}</code> ${escapeHtml(c.msg)}`);
+    }
+  }
+
+  if (s.tools.length) {
+    parts.push('');
+    parts.push('<b>🔧 Recent actions</b>');
+    for (const t of s.tools) {
+      parts.push(`  • ${escapeHtml(t.tool)}: <code>${escapeHtml(t.arg)}</code>`);
+    }
+  }
+
+  if (s.errors.length) {
+    parts.push('');
+    parts.push(`<b>❗ Errors</b>`);
+    for (const e of s.errors) parts.push(`  • <code>${escapeHtml(e)}</code>`);
+  }
+
+  if (s.a2as.length) {
+    parts.push('');
+    parts.push('<b>📡 A2A</b>');
+    for (const a of s.a2as) {
+      parts.push(`  • ${escapeHtml(a.type)} pane-${a.from}→pane-${a.to} <code>${escapeHtml(a.corr)}</code>`);
+    }
+  }
+
+  const html = parts.join('\n');
+  return html.length > MAX_HTML_LENGTH ? html.slice(0, MAX_HTML_LENGTH) : html;
+}
+
+// --- Event detection (STREAMER_MODE=events) ---
+// Scans the tail of a pane's scrollback for meaningful events. Each event
+// has a fingerprint used for dedup across polls (so a commit that stays
+// visible for multiple poll cycles only posts once).
+function detectEvents(text) {
+  const events = [];
+  if (!text) return events;
+  const tail = text.split('\n').slice(-EVENT_SCROLLBACK_LINES).join('\n');
+
+  // Commits: "[branch abc1234] message"
+  for (const m of tail.matchAll(/\[([\w\/-]+)\s+([a-f0-9]{7,})\]\s+(.+?)(?=\n|$)/g)) {
+    const sha = m[2];
+    const msg = m[3].trim().replace(/\s+/g, ' ').slice(0, 180);
+    events.push({
+      type: 'commit',
+      title: `📝 Commit <code>${escapeHtml(sha)}</code>`,
+      detail: escapeHtml(msg),
+      fingerprint: `commit:${sha}`,
+    });
+  }
+
+  // Pushes: "abc1234..def5678 branch -> branch" line
+  for (const m of tail.matchAll(/^\s+([a-f0-9]{7,}\.\.[a-f0-9]{7,})\s+(\S+)\s+->\s+(\S+)/gm)) {
+    events.push({
+      type: 'push',
+      title: `🚀 Pushed <code>${escapeHtml(m[1])}</code>`,
+      detail: `${escapeHtml(m[2])} → ${escapeHtml(m[3])}`,
+      fingerprint: `push:${m[1]}`,
+    });
+  }
+  // New-branch push
+  for (const m of tail.matchAll(/\*\s+\[new branch\]\s+(\S+)\s+->\s+(\S+)/g)) {
+    events.push({
+      type: 'push',
+      title: `🌱 New branch pushed`,
+      detail: `${escapeHtml(m[1])} → ${escapeHtml(m[2])}`,
+      fingerprint: `push-new:${m[1]}-${m[2]}`,
+    });
+  }
+
+  // File-modification tool calls (Edit/Write/MultiEdit) — rare, high-signal.
+  // Skip Bash/Read/Glob/Grep entirely: they fire many times per second during
+  // active work and saturate Telegram's 20msg/min group rate limit. Commits
+  // and pushes detected separately provide the git-activity signal instead.
+  for (const m of tail.matchAll(/^●\s+(Edit|Write|MultiEdit)\(([^\n]{0,120})/gm)) {
+    const tool = m[1];
+    const arg = m[2].replace(/\s+/g, ' ').slice(0, 100).trim();
+    events.push({
+      type: 'tool',
+      title: `✏️ ${tool}`,
+      detail: `<code>${escapeHtml(arg)}</code>`,
+      fingerprint: `tool:${tool}:${arg.slice(0, 60)}`,
+    });
+  }
+
+  // High-signal Bash calls only: git commit/push/tag, docker up/down/restart,
+  // npm run test/build, npx run, go test. Everything else skipped.
+  for (const m of tail.matchAll(/^●\s+Bash\(([^\n]{0,120})/gm)) {
+    const arg = m[1].replace(/\s+/g, ' ').slice(0, 100).trim();
+    if (!/\b(git\s+(commit|push|tag|rebase|merge|reset\s+--hard)|docker\s+compose|npm\s+(run|test|build)|npx\s+run|go\s+test|cargo\s+(test|build)|pnpm\s+(run|test|build)|make\s+\w+)\b/i.test(arg)) continue;
+    events.push({
+      type: 'tool',
+      title: `🔧 Bash`,
+      detail: `<code>${escapeHtml(arg)}</code>`,
+      fingerprint: `bash:${arg.slice(0, 80)}`,
+    });
+  }
+
+  // Errors: standalone "ERROR" / "Exception" / "FATAL" markers
+  for (const m of tail.matchAll(/^(.{0,60}(?:ERROR|Exception|FATAL|FAIL)[:\s].{0,200})$/gm)) {
+    const line = m[1].trim().replace(/\s+/g, ' ').slice(0, 200);
+    // Skip the streamer's own error logs (they contain "Edit failed for")
+    if (/Edit failed for|Send failed for|Stop hook error/.test(line)) continue;
+    events.push({
+      type: 'error',
+      title: `❌ Error`,
+      detail: `<code>${escapeHtml(line)}</code>`,
+      fingerprint: `error:${line.slice(0, 80)}`,
+    });
+  }
+
+  // A2A envelopes — cross-pane messages
+  for (const m of tail.matchAll(/\[A2A from pane-(\d+) to pane-(\d+) \| corr=([^\s|]+) \| type=(\w+)\]/g)) {
+    events.push({
+      type: 'a2a',
+      title: `📡 A2A ${escapeHtml(m[4])} pane-${m[1]}→pane-${m[2]}`,
+      detail: `corr=<code>${escapeHtml(m[3])}</code>`,
+      fingerprint: `a2a:${m[3]}:${m[4]}:${m[1]}-${m[2]}`,
+    });
+  }
+
+  return events;
+}
+
+// Event-mode stream loop for a single pane
+async function streamPaneEvents(pane, project) {
+  let threadId = topicMap[project];
+  if (!threadId) {
+    threadId = await createTopicIfMissing(project);
+    if (!threadId) return;
+  }
+
+  const streamKey = `${project}:${pane.pane_id}`;
+  let stream = streams.get(streamKey);
+  if (!stream) {
+    stream = { seen: new Set(), lastSentAt: 0, errorCount: 0, rateLimitedUntil: 0, mode: 'events' };
+    streams.set(streamKey, stream);
+  }
+
+  const now = Date.now();
+  if (stream.rateLimitedUntil && now < stream.rateLimitedUntil) return;
+  if (now - stream.lastSentAt < EVENT_MIN_INTERVAL_MS) return;
+
+  try {
+    const raw = getFullText(pane.pane_id);
+    if (!raw) {
+      stream.errorCount++;
+      if (stream.errorCount >= ERROR_LIMIT) {
+        stderr(`Pane ${pane.pane_id} (${project}) dead after ${ERROR_LIMIT} errors, stopping`);
+        streams.delete(streamKey);
+      }
+      return;
+    }
+    stream.errorCount = 0;
+
+    const events = detectEvents(raw);
+    // Post only NEW events (not seen yet). One per poll to space out Telegram calls.
+    const fresh = events.filter(e => !stream.seen.has(e.fingerprint));
+    if (fresh.length === 0) {
+      // Still mark all currently-detected as seen so they don't re-fire when the seen set is reset
+      for (const ev of events) stream.seen.add(ev.fingerprint);
+      return;
+    }
+
+    // Prefer higher-value events first if multiple are new this cycle
+    const priority = { error: 0, a2a: 1, push: 2, commit: 3, tool: 4 };
+    fresh.sort((a, b) => (priority[a.type] ?? 9) - (priority[b.type] ?? 9));
+    const ev = fresh[0];
+
+    const text = `<b>${ev.title}</b>\n${ev.detail}`;
+    const result = await telegramPost('sendMessage', {
+      chat_id: GROUP_ID,
+      message_thread_id: threadId,
+      text,
+      parse_mode: 'HTML',
+      disable_notification: true,
+    });
+
+    if (result.ok) {
+      stream.seen.add(ev.fingerprint);
+      // Cap seen-set size to avoid unbounded memory growth
+      if (stream.seen.size > 300) {
+        stream.seen = new Set([...stream.seen].slice(-150));
+      }
+      stream.lastSentAt = now;
+      emit({ source: 'telegram-streamer', project, event: 'event_posted', event_type: ev.type, pane: pane.pane_id });
+    } else if (result.description && /Too Many Requests|retry after/i.test(result.description)) {
+      const match = result.description.match(/retry after (\d+)/);
+      const retryAfter = match ? parseInt(match[1], 10) : 15;
+      stream.rateLimitedUntil = now + retryAfter * 1000 + 500;
+      stderr(`Rate limited ${project} for ${retryAfter}s (event mode)`);
+    } else if (result.description && /can't parse entities/i.test(result.description)) {
+      // HTML broken — retry as plain
+      const plain = text.replace(/<[^>]+>/g, '').slice(0, 4000);
+      const retry = await telegramPost('sendMessage', {
+        chat_id: GROUP_ID,
+        message_thread_id: threadId,
+        text: plain,
+        disable_notification: true,
+      });
+      if (retry.ok) {
+        stream.seen.add(ev.fingerprint);
+        stream.lastSentAt = now;
+      } else {
+        stderr(`Event plain-text retry failed for ${project}: ${retry.description || 'unknown'}`);
+      }
+    } else {
+      stderr(`Event send failed for ${project}: ${result.description || 'unknown'}`);
+    }
+  } catch (err) {
+    stream.errorCount++;
+    stderr(`Event poll error for ${project}: ${err.message} (count ${stream.errorCount})`);
+  }
+}
+
 // --- Main stream loop for a single pane ---
 async function streamPane(pane, project, isDuplicate) {
+  // In events mode, delegate entirely to the event-based streamer.
+  if (STREAMER_MODE === 'events') return streamPaneEvents(pane, project);
   let threadId = topicMap[project];
   if (!threadId) {
     // Auto-create topic for this project (first time we see it)
@@ -568,7 +899,11 @@ async function streamPane(pane, project, isDuplicate) {
 
     const identity = detectAgentModel(pane, raw);
     const paneLabel = formatPaneLabel(project, identity, isDuplicate);
-    const html = buildLiveHtml(project, pane.pane_id, raw, stream.startTime, paneLabel);
+    // `card` = structured digest (Ctx/Now/Commits/Actions/Errors/A2A), edited in place.
+    // `raw`  = legacy verbatim last-40-lines dump. Kept for rollback via env var.
+    const html = STREAMER_MODE === 'raw'
+      ? buildLiveHtml(project, pane.pane_id, raw, stream.startTime, paneLabel)
+      : buildCardHtml(project, paneLabel, raw);
     const hash = simpleHash(html);
 
     // Skip if unchanged
@@ -759,11 +1094,12 @@ emit({
   source: 'telegram-streamer',
   event: 'started',
   version: 'v2-ported-from-openclaw2claude',
+  mode: STREAMER_MODE,
   topics: Object.keys(topicMap).filter(k => k !== '_group_id').length,
   poll_interval_ms: POLL_INTERVAL_MS,
-  min_edit_interval_ms: MIN_EDIT_INTERVAL_MS,
+  min_edit_interval_ms: STREAMER_MODE === 'events' ? EVENT_MIN_INTERVAL_MS : MIN_EDIT_INTERVAL_MS,
 });
-stderr(`v2 started. Watching ${Object.keys(topicMap).length - 1} topics. Poll every ${POLL_INTERVAL_MS}ms.`);
+stderr(`v2 started. Mode: ${STREAMER_MODE}. Watching ${Object.keys(topicMap).length - 1} topics. Poll every ${POLL_INTERVAL_MS}ms.`);
 
 // Initial poll
 pollAll().catch(err => stderr(`Initial poll error: ${err.message}`));
