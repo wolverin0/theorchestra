@@ -144,4 +144,22 @@ export const backendClient = {
 
   listWorkspaces: (opts?: BackendClientOptions) =>
     request<{ workspaces: unknown[] }>('GET', '/api/workspaces', opts),
+
+  listPersonas: (opts?: BackendClientOptions) =>
+    request<{ personas: Array<{ name: string; filePath: string; description: string; category: string | null }> }>(
+      'GET',
+      '/api/personas',
+      opts,
+    ),
+
+  autoHandoff: (sessionId: string, body: { focus?: string; force?: boolean }, opts?: BackendClientOptions) =>
+    request<unknown>('POST', `/api/sessions/${encodeURIComponent(sessionId)}/auto-handoff`, opts, body),
+
+  prdBootstrap: (source: string, opts?: BackendClientOptions) =>
+    request<{ project: string; cwd: string; spawned: Array<{ role: string; session_id: string; persona: string | null }> }>(
+      'POST',
+      '/api/prd-bootstrap',
+      opts,
+      { source },
+    ),
 };

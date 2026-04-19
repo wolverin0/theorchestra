@@ -17,6 +17,15 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 import { PtyManager, type PtyDataEvent, type PtyExitEvent } from './pty-manager.js';
 import { EventBus, writeSseEvent, writeSseHeaders } from './events.js';
+import { runAutoHandoff, type AutoHandoffTimeouts } from './auto-handoff.js';
+import { listPersonas, resolvePersona } from './personas.js';
+import {
+  addWorktree,
+  defaultWorktreePath,
+  listWorktrees,
+  removeWorktree,
+} from './worktree.js';
+import { parsePrdYaml, type PrdSpec } from './prd-bootstrap.js';
 import {
   DEFAULT_DASHBOARD_PORT,
   WS_PATH_PREFIX,
@@ -144,7 +153,7 @@ function parsePath(rawUrl: string): { pathname: string; query: URLSearchParams }
 
 interface SessionRouteMatch {
   sessionId: string;
-  suffix: string; // '' | 'output' | 'status' | 'prompt' | 'key' | 'title' | 'wait-idle'
+  suffix: string; // '' | 'output' | 'status' | 'prompt' | 'key' | 'title' | 'wait-idle' | 'auto-handoff'
 }
 
 function matchSessionRoute(pathname: string): SessionRouteMatch | null {
@@ -247,6 +256,156 @@ function makeHttpHandler(manager: PtyManager, bus: EventBus) {
           { name: 'default', session_ids: manager.list().map((r) => r.sessionId) },
         ],
       });
+      return;
+    }
+
+    // Phase 5 — agency mode endpoints.
+
+    if (method === 'GET' && pathname === '/api/personas') {
+      const personas = listPersonas();
+      writeJson(res, 200, { personas });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/worktrees') {
+      const repoPath = query.get('repo');
+      if (!repoPath) {
+        writeJson(res, 400, { error: 'missing_repo', detail: '?repo=<absolute path> required' });
+        return;
+      }
+      try {
+        const paths = await listWorktrees(repoPath);
+        writeJson(res, 200, { repo: repoPath, worktrees: paths });
+      } catch (err) {
+        writeJson(res, 500, {
+          error: 'list_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/worktree') {
+      try {
+        const body = (await readJsonBody(req)) as {
+          repo?: unknown;
+          branch?: unknown;
+          worktree_path?: unknown;
+          create_branch?: unknown;
+        };
+        if (typeof body.repo !== 'string' || typeof body.branch !== 'string') {
+          writeJson(res, 400, {
+            error: 'invalid_body',
+            detail: 'repo (string, absolute) + branch (string) required',
+          });
+          return;
+        }
+        const worktreePath =
+          typeof body.worktree_path === 'string' && body.worktree_path.length > 0
+            ? body.worktree_path
+            : defaultWorktreePath(body.repo, body.branch);
+        const result = await addWorktree({
+          repoPath: body.repo,
+          branch: body.branch,
+          worktreePath,
+          createBranch: body.create_branch !== false,
+        });
+        writeJson(res, 201, result);
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'add_worktree_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (method === 'DELETE' && pathname === '/api/worktree') {
+      try {
+        const body = (await readJsonBody(req)) as {
+          repo?: unknown;
+          worktree_path?: unknown;
+          force?: unknown;
+        };
+        if (typeof body.repo !== 'string' || typeof body.worktree_path !== 'string') {
+          writeJson(res, 400, {
+            error: 'invalid_body',
+            detail: 'repo + worktree_path (both strings, absolute) required',
+          });
+          return;
+        }
+        await removeWorktree(body.repo, body.worktree_path, Boolean(body.force));
+        writeJson(res, 200, { removed: body.worktree_path });
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'remove_worktree_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/prd-bootstrap') {
+      try {
+        const body = (await readJsonBody(req)) as { source?: unknown };
+        if (typeof body.source !== 'string' || body.source.length === 0) {
+          writeJson(res, 400, {
+            error: 'invalid_body',
+            detail: 'source (YAML string) required',
+          });
+          return;
+        }
+        let spec: PrdSpec;
+        try {
+          spec = parsePrdYaml(body.source);
+        } catch (err) {
+          writeJson(res, 400, {
+            error: 'prd_parse_failed',
+            detail: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
+        const spawned: Array<{ role: string; session_id: string; persona: string | null }> = [];
+        for (const role of spec.roles) {
+          const personaPath = role.persona ? resolvePersona(role.persona) : null;
+          if (role.persona && !personaPath) {
+            writeJson(res, 400, {
+              error: 'unknown_persona',
+              detail: `role "${role.name}" requested persona "${role.persona}" which is not in ~/.claude/agents/`,
+            });
+            return;
+          }
+          const isWin = process.platform === 'win32';
+          const claudeArgs: string[] = ['--continue'];
+          if (personaPath) {
+            claudeArgs.splice(0, claudeArgs.length, '--append-system-prompt-file', personaPath);
+          }
+          if (role.permission_mode) {
+            claudeArgs.push('--permission-mode', role.permission_mode);
+          }
+          const cli = isWin ? 'cmd.exe' : 'claude';
+          const args = isWin ? ['/c', 'claude', ...claudeArgs] : claudeArgs;
+          const record = manager.spawn({
+            cli,
+            args,
+            cwd: spec.cwd,
+            tabTitle: role.tab_title ?? `[${role.name}]`,
+            persona: role.persona ?? null,
+            permissionMode: role.permission_mode ?? null,
+          });
+          spawned.push({
+            role: role.name,
+            session_id: record.sessionId,
+            persona: role.persona ?? null,
+          });
+        }
+        writeJson(res, 201, { project: spec.project, cwd: spec.cwd, spawned });
+      } catch (err) {
+        writeJson(res, 500, {
+          error: 'prd_bootstrap_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 
@@ -354,6 +513,51 @@ function makeHttpHandler(manager: PtyManager, bus: EventBus) {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           writeJson(res, 400, { error: 'rename_failed', detail: msg });
+        }
+        return;
+      }
+
+      // POST /api/sessions/:id/auto-handoff  {focus?, force?, timeouts?}  — Phase 4
+      if (method === 'POST' && match.suffix === 'auto-handoff') {
+        try {
+          const body = (await readJsonBody(req)) as {
+            focus?: unknown;
+            force?: unknown;
+            timeouts?: unknown;
+          };
+          const focus = typeof body.focus === 'string' ? body.focus : undefined;
+          const force = body.force === true;
+          const timeouts =
+            body.timeouts && typeof body.timeouts === 'object'
+              ? (body.timeouts as Partial<AutoHandoffTimeouts>)
+              : undefined;
+          const result = await runAutoHandoff(manager, bus, match.sessionId, {
+            ...(focus !== undefined ? { focus } : {}),
+            force,
+            ...(timeouts ? { timeouts } : {}),
+          });
+          switch (result.status) {
+            case 'completed':
+              writeJson(res, 200, result);
+              return;
+            case 'not_found':
+              writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+              return;
+            case 'pane_working':
+            case 'not_ready':
+              writeJson(res, 409, result);
+              return;
+            case 'readiness_timeout':
+            case 'generation_timeout':
+              writeJson(res, 504, result);
+              return;
+            case 'incomplete_file':
+              writeJson(res, 500, result);
+              return;
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeJson(res, 500, { error: 'auto_handoff_failed', detail: msg });
         }
         return;
       }

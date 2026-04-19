@@ -1,30 +1,23 @@
 /**
- * Phase 2 MCP tool handlers for high-level, orchestrator-driven flows.
+ * Phase 4 MCP tool handler — auto_handoff.
  *
- * - `auto_handoff` is a Phase 4 feature (A2A + auto-handoff). v3.0 Phase 2
- *   registers it as an informational stub so the tool surface matches v2.7
- *   and callers can inspect the planned flow in advance. The stub returns a
- *   non-isError result so blocking callers still progress.
+ * v3.0 forwards the call to the backend's /api/sessions/:id/auto-handoff
+ * endpoint (see src/backend/auto-handoff.ts). Result shape is passed
+ * through as-is; the backend owns timeouts, readiness check, /clear, and
+ * continuation injection.
  */
 
 import { z } from 'zod';
-import { jsonResult, type ToolHandler } from '../handler-types.js';
+import { backendClient, BackendHttpError } from '../client.js';
+import { errorResult, jsonResult, type ToolHandler } from '../handler-types.js';
 
 const autoHandoffShape = {
-  pane_id: z
-    .string()
-    .min(1)
-    .describe('Target pane ID'),
-  focus: z
-    .string()
-    .optional()
-    .describe('Optional: what should the handoff prioritize?'),
+  pane_id: z.string().min(1).describe('Target session ID (v3.0 UUID)'),
+  focus: z.string().optional().describe('Optional: what should the handoff prioritize?'),
   force: z
     .boolean()
     .optional()
-    .describe(
-      'Skip readiness check (use when you know the pane is at a break point)',
-    ),
+    .describe('Skip readiness check (use when you know the pane is at a break point)'),
 } as const;
 
 interface AutoHandoffInput {
@@ -38,23 +31,22 @@ const autoHandoffHandler: ToolHandler<AutoHandoffInput> = {
   description:
     'Trigger an intelligent auto-handoff on a pane: readiness check -> handoff file -> /clear -> continuation inject. The pane will self-report if it is ready (READY/NOT_READY). Use focus to guide what the handoff should prioritize.',
   inputSchema: autoHandoffShape,
-  run: async (input) =>
-    jsonResult({
-      status: 'pending_phase_4',
-      pane_id: input.pane_id,
-      focus: input.focus ?? null,
-      force: Boolean(input.force),
-      planned_flow: [
-        'readiness check — send "READY?" to pane, expect READY/NOT_READY reply within 120s',
-        'handoff file write — <cwd>/handoffs/handoff-<to>-<ts>-<uuid>.md with the 7-section template',
-        'pre-clear idle wait — wait until pane is idle',
-        'ctrl+c + belt-and-suspenders enters',
-        '/clear submission',
-        'continuation-inject — send pane a pointer to the handoff file',
-      ],
-      notes:
-        'auto_handoff becomes fully operational in Phase 4 per docs/v3.0-plan.md. For now the MCP tool returns this plan so callers can understand what will happen.',
-    }),
+  run: async (input) => {
+    try {
+      const result = await backendClient.autoHandoff(input.pane_id, {
+        focus: input.focus,
+        force: input.force,
+      });
+      return jsonResult(result);
+    } catch (err) {
+      if (err instanceof BackendHttpError) {
+        // Return the backend's structured error body when available.
+        return jsonResult(err.body ?? { status: 'error', http: err.status }, true);
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return errorResult(`auto_handoff failed: ${msg}`);
+    }
+  },
 };
 
 export const highLevelHandlers: ToolHandler<unknown>[] = [
