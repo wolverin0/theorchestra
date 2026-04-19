@@ -109,28 +109,81 @@ function isSpawnOptions(v: unknown): v is PtySpawnOptions {
   return typeof o.cli === 'string' && o.cli.length > 0;
 }
 
+/** Translate v2.7-compatible key aliases into byte sequences to write to the PTY. */
+function keyAliasToBytes(key: string): string {
+  const k = key.toLowerCase();
+  switch (k) {
+    case 'enter':
+      return '\r';
+    case 'ctrl+c':
+    case 'ctrl-c':
+      return '\x03';
+    case 'alt+m':
+    case 'meta+m':
+      return '\x1bm';
+    case 'y':
+    case '1':
+      return '1';
+    case 'n':
+    case '2':
+      return '2';
+    case '3':
+      return '3';
+    default:
+      return key;
+  }
+}
+
+function parsePath(rawUrl: string): { pathname: string; query: URLSearchParams } {
+  const q = rawUrl.indexOf('?');
+  const pathname = q === -1 ? rawUrl : rawUrl.slice(0, q);
+  const query = new URLSearchParams(q === -1 ? '' : rawUrl.slice(q + 1));
+  return { pathname, query };
+}
+
+interface SessionRouteMatch {
+  sessionId: string;
+  suffix: string; // '' | 'output' | 'status' | 'prompt' | 'key' | 'title' | 'wait-idle'
+}
+
+function matchSessionRoute(pathname: string): SessionRouteMatch | null {
+  if (!pathname.startsWith('/api/sessions/')) return null;
+  const rest = pathname.slice('/api/sessions/'.length);
+  if (rest.length === 0) return null;
+  const slash = rest.indexOf('/');
+  if (slash === -1) return { sessionId: rest, suffix: '' };
+  const sessionId = rest.slice(0, slash);
+  const suffix = rest.slice(slash + 1);
+  return { sessionId, suffix };
+}
+
 function makeHttpHandler(manager: PtyManager) {
   return async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const method = req.method ?? 'GET';
     const url = req.url ?? '/';
 
     if (method === 'OPTIONS' && url.startsWith('/api/')) {
-      res.writeHead(204, CORS_HEADERS);
+      res.writeHead(204, {
+        ...CORS_HEADERS,
+        'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+      });
       res.end();
       return;
     }
 
-    if (method === 'GET' && url === '/api/health') {
+    const { pathname, query } = parsePath(url);
+
+    if (method === 'GET' && pathname === '/api/health') {
       writeJson(res, 200, { ok: true, version: VERSION });
       return;
     }
 
-    if (method === 'GET' && url === '/api/sessions') {
+    if (method === 'GET' && pathname === '/api/sessions') {
       writeJson(res, 200, manager.list());
       return;
     }
 
-    if (method === 'POST' && url === '/api/sessions') {
+    if (method === 'POST' && pathname === '/api/sessions') {
       try {
         const body = await readJsonBody(req);
         if (!isSpawnOptions(body)) {
@@ -143,6 +196,188 @@ function makeHttpHandler(manager: PtyManager) {
         const msg = err instanceof Error ? err.message : String(err);
         writeJson(res, 400, { error: 'spawn_failed', detail: msg });
       }
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/projects') {
+      // Group live sessions by the basename of their cwd. Phase 2 stub;
+      // Phase 2+ may wire a real project-scanner if the user wants to see
+      // projects that don't currently have an open session.
+      const byProject = new Map<string, string[]>();
+      for (const rec of manager.list()) {
+        const projectName = path.basename(rec.cwd) || rec.cwd;
+        const list = byProject.get(projectName) ?? [];
+        list.push(rec.sessionId);
+        byProject.set(projectName, list);
+      }
+      const projects = Array.from(byProject.entries()).map(([name, sessionIds]) => ({
+        name,
+        session_count: sessionIds.length,
+        session_ids: sessionIds,
+      }));
+      writeJson(res, 200, { projects });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/workspaces') {
+      // Phase 2 stub — single "default" workspace. Real multi-workspace
+      // support lands with the dashboard layout work in Phase 6.
+      writeJson(res, 200, {
+        workspaces: [
+          { name: 'default', session_ids: manager.list().map((r) => r.sessionId) },
+        ],
+      });
+      return;
+    }
+
+    const match = matchSessionRoute(pathname);
+    if (match) {
+      const record = manager.get(match.sessionId);
+      if (!record && match.suffix !== '') {
+        writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+        return;
+      }
+
+      // DELETE /api/sessions/:id  — kill_session
+      if (method === 'DELETE' && match.suffix === '') {
+        if (!record) {
+          writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+          return;
+        }
+        manager.kill(match.sessionId);
+        writeJson(res, 200, { killed: match.sessionId });
+        return;
+      }
+
+      // GET /api/sessions/:id  — detail
+      if (method === 'GET' && match.suffix === '') {
+        if (!record) {
+          writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+          return;
+        }
+        writeJson(res, 200, record);
+        return;
+      }
+
+      // GET /api/sessions/:id/output?lines=N  — read_output
+      if (method === 'GET' && match.suffix === 'output') {
+        const linesStr = query.get('lines');
+        const requested = linesStr ? Number.parseInt(linesStr, 10) : 100;
+        const lines = Math.max(1, Math.min(Number.isFinite(requested) ? requested : 100, 500));
+        const tail = manager.scrollbackTail(match.sessionId, lines);
+        writeJson(res, 200, { session_id: match.sessionId, lines: tail });
+        return;
+      }
+
+      // GET /api/sessions/:id/status  — get_status
+      if (method === 'GET' && match.suffix === 'status') {
+        const detail = manager.statusDetail(match.sessionId);
+        if (!detail) {
+          writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+          return;
+        }
+        writeJson(res, 200, { ...detail, record });
+        return;
+      }
+
+      // POST /api/sessions/:id/prompt  {text}  — send_prompt
+      if (method === 'POST' && match.suffix === 'prompt') {
+        try {
+          const body = (await readJsonBody(req)) as { text?: unknown };
+          if (typeof body.text !== 'string' || body.text.length === 0) {
+            writeJson(res, 400, { error: 'invalid_body', detail: 'text (non-empty string) required' });
+            return;
+          }
+          // Write text + \r. node-pty is reliable, unlike wezterm-cli, so a
+          // single write with a trailing \r is enough — no triple-redundancy.
+          manager.write(match.sessionId, `${body.text}\r`);
+          writeJson(res, 200, { session_id: match.sessionId, sent: body.text.length + 1 });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeJson(res, 400, { error: 'send_failed', detail: msg });
+        }
+        return;
+      }
+
+      // POST /api/sessions/:id/key  {key}  — send_key
+      if (method === 'POST' && match.suffix === 'key') {
+        try {
+          const body = (await readJsonBody(req)) as { key?: unknown };
+          if (typeof body.key !== 'string' || body.key.length === 0) {
+            writeJson(res, 400, { error: 'invalid_body', detail: 'key (non-empty string) required' });
+            return;
+          }
+          const bytes = keyAliasToBytes(body.key);
+          manager.write(match.sessionId, bytes);
+          writeJson(res, 200, { session_id: match.sessionId, key: body.key, bytes: bytes.length });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeJson(res, 400, { error: 'send_failed', detail: msg });
+        }
+        return;
+      }
+
+      // POST /api/sessions/:id/title  {title}  — set_tab_title
+      if (method === 'POST' && match.suffix === 'title') {
+        try {
+          const body = (await readJsonBody(req)) as { title?: unknown };
+          if (typeof body.title !== 'string') {
+            writeJson(res, 400, { error: 'invalid_body', detail: 'title (string) required' });
+            return;
+          }
+          const ok = manager.setTabTitle(match.sessionId, body.title);
+          if (!ok) {
+            writeJson(res, 404, { error: 'session_not_found', session_id: match.sessionId });
+            return;
+          }
+          writeJson(res, 200, { session_id: match.sessionId, title: body.title });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeJson(res, 400, { error: 'rename_failed', detail: msg });
+        }
+        return;
+      }
+
+      // POST /api/sessions/:id/wait-idle  {max_wait_s, poll_interval_s}  — wait_for_idle
+      if (method === 'POST' && match.suffix === 'wait-idle') {
+        try {
+          const body = (await readJsonBody(req)) as {
+            max_wait_s?: unknown;
+            poll_interval_s?: unknown;
+          };
+          const maxWaitS = Math.min(
+            Math.max(Number(body.max_wait_s) || 120, 1),
+            600,
+          );
+          const pollS = Math.min(
+            Math.max(Number(body.poll_interval_s) || 3, 1),
+            30,
+          );
+          const deadline = Date.now() + maxWaitS * 1000;
+          let timedOut = true;
+          while (Date.now() < deadline) {
+            const status = manager.status(match.sessionId);
+            if (status === 'idle' || status === 'exited') {
+              timedOut = false;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, pollS * 1000));
+          }
+          const detail = manager.statusDetail(match.sessionId);
+          writeJson(res, 200, {
+            session_id: match.sessionId,
+            timed_out: timedOut,
+            status: detail?.status ?? 'exited',
+            last_lines: detail?.lastLines ?? [],
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          writeJson(res, 400, { error: 'wait_failed', detail: msg });
+        }
+        return;
+      }
+
+      writeJson(res, 405, { error: 'method_not_allowed', detail: `${method} ${pathname}` });
       return;
     }
 

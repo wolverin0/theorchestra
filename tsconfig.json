@@ -17,6 +17,7 @@
   "include": [
     "src/backend/**/*.ts",
     "src/shared/**/*.ts",
+    "src/mcp/**/*.ts",
     "scripts/**/*.ts"
   ],
   "exclude": [

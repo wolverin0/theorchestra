@@ -38,7 +38,10 @@
     "v3:backend": "tsx scripts/theorchestra-start.ts",
     "v3:frontend": "vite --config src/frontend/vite.config.ts",
     "v3:build-frontend": "vite build --config src/frontend/vite.config.ts",
-    "v3:typecheck": "tsc --noEmit && tsc --noEmit -p src/frontend/tsconfig.json"
+    "v3:typecheck": "tsc --noEmit && tsc --noEmit -p src/frontend/tsconfig.json",
+    "v3:mcp": "tsx src/mcp/server.ts",
+    "v3:phase2-gate": "tsx scripts/v3-phase2-gate.ts",
+    "v3:phase2-mcp-gate": "tsx scripts/v3-phase2-mcp-gate.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",

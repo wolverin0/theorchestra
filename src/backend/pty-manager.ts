@@ -14,9 +14,12 @@ import type { IPty } from 'node-pty';
 
 import {
   RING_BUFFER_LINES,
+  WORKING_THRESHOLD_MS,
   type PtySpawnOptions,
   type SessionId,
   type SessionRecord,
+  type SessionStatus,
+  type SessionStatusDetail,
 } from '../shared/types.js';
 
 interface PtyEntry {
@@ -28,6 +31,11 @@ interface PtyEntry {
   current: string;
   /** Whether the process has exited; set true on first exit event. */
   exited: boolean;
+  /** Last exit code and signal, if the pty has exited. */
+  exitCode: number | null;
+  exitSignal: number | null;
+  /** Timestamp (ms epoch) of the last `data` event from the pty. */
+  lastDataAt: number | null;
 }
 
 export interface PtyDataEvent {
@@ -73,6 +81,9 @@ export class PtyManager extends EventEmitter {
       tabTitle,
       spawnedAt: new Date().toISOString(),
       pid: child.pid ?? -1,
+      persona: opts.persona ?? null,
+      permissionMode: opts.permissionMode ?? null,
+      spawnedByPaneId: opts.spawnedByPaneId ?? null,
     };
 
     const entry: PtyEntry = {
@@ -81,16 +92,22 @@ export class PtyManager extends EventEmitter {
       ring: [],
       current: '',
       exited: false,
+      exitCode: null,
+      exitSignal: null,
+      lastDataAt: null,
     };
     this.sessions.set(sessionId, entry);
 
     child.onData((chunk: string) => {
+      entry.lastDataAt = Date.now();
       this.ingest(entry, chunk);
       this.emit('data', { sessionId, data: chunk } satisfies PtyDataEvent);
     });
 
     child.onExit(({ exitCode, signal }) => {
       entry.exited = true;
+      entry.exitCode = exitCode ?? null;
+      entry.exitSignal = signal ?? null;
       // Flush any trailing non-newlined text into the ring so scrollback is
       // complete after process exit.
       if (entry.current.length > 0) {
@@ -142,6 +159,53 @@ export class PtyManager extends EventEmitter {
       return entry.ring.join('\n');
     }
     return [...entry.ring, entry.current].join('\n');
+  }
+
+  /** Return the last `n` scrollback lines (including the in-progress tail). */
+  scrollbackTail(id: SessionId, n: number): string[] {
+    const entry = this.sessions.get(id);
+    if (!entry) return [];
+    const allLines = entry.current.length > 0
+      ? [...entry.ring, entry.current]
+      : entry.ring;
+    const count = Math.max(0, Math.min(n, allLines.length));
+    return allLines.slice(allLines.length - count);
+  }
+
+  /**
+   * Derive a coarse session status. Phase 2 heuristic:
+   *   exited      → pty has exited
+   *   working     → output landed within WORKING_THRESHOLD_MS
+   *   idle        → everything else (including "never produced output yet")
+   *
+   * Phase 3 (ADR-003) replaces this with a11y-tree + SSE deterministic signals.
+   */
+  status(id: SessionId): SessionStatus {
+    const entry = this.sessions.get(id);
+    if (!entry) return 'exited';
+    if (entry.exited) return 'exited';
+    if (entry.lastDataAt === null) return 'idle';
+    return Date.now() - entry.lastDataAt < WORKING_THRESHOLD_MS ? 'working' : 'idle';
+  }
+
+  statusDetail(id: SessionId): SessionStatusDetail | undefined {
+    const entry = this.sessions.get(id);
+    if (!entry) return undefined;
+    return {
+      sessionId: id,
+      status: this.status(id),
+      exitCode: entry.exitCode,
+      exitSignal: entry.exitSignal,
+      lastOutputAt: entry.lastDataAt === null ? null : new Date(entry.lastDataAt).toISOString(),
+      lastLines: this.scrollbackTail(id, 10),
+    };
+  }
+
+  setTabTitle(id: SessionId, title: string): boolean {
+    const entry = this.sessions.get(id);
+    if (!entry) return false;
+    entry.record.tabTitle = title;
+    return true;
   }
 
   kill(id: SessionId): void {
