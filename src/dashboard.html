@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>WezBridge</title>
+<title>theorchestra</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -986,7 +986,7 @@ code, pre, .mono { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace
 <!-- Top Bar -->
 <div class="topbar">
   <div class="topbar-left">
-    <div class="topbar-brand">Wez<span>Bridge</span></div>
+    <div class="topbar-brand">the<span>orchestra</span></div>
     <div class="topbar-menu">
       <a class="active" data-view="sessions" onclick="switchView('sessions')">Sessions</a>
       <a data-view="live" onclick="switchView('live')">Live</a>
@@ -1439,7 +1439,7 @@ function showNotification(event) {
 
   // Browser Notification API
   if (Notification.permission === 'granted') {
-    new Notification('WezBridge: ' + title, { body: body.slice(0, 100), silent: false });
+    new Notification('theorchestra: ' + title, { body: body.slice(0, 100), silent: false });
   } else if (Notification.permission !== 'denied') {
     Notification.requestPermission();
   }
@@ -3679,11 +3679,20 @@ function submitAutoHandoff(paneId) {
   triggerAutoHandoff(paneId, focus || undefined, force || undefined);
 }
 
+// Client-side dedup for auto-handoff-suggest toasts. The daemon's server-side
+// cooldown is 15min, but SSE reconnects or accumulated pendingAutoHandoffEvents
+// can deliver the same event repeatedly, stacking dozens of identical toasts.
+// Fix: remember per-pane last-shown timestamp, suppress duplicates within 60s.
+const _autoHandoffToastSeen = new Map(); // paneId -> ms timestamp
 function handleAutoHandoffSuggest(ev) {
   const mode = getAutoHandoffMode();
   if (mode === 'off') return;
   const paneId = ev.pane_id;
   if (isAutoHandoffSuppressed(paneId)) return;
+  const now = Date.now();
+  const last = _autoHandoffToastSeen.get(paneId) || 0;
+  if (now - last < 60000) return; // already toasted in last 60s
+  _autoHandoffToastSeen.set(paneId, now);
   pushToast({
     kind: 'info',
     title: 'Plan handoff for pane-' + paneId + '?',
