@@ -188,6 +188,21 @@ const A2A_ENVELOPE_RE = /\[A2A from pane-(\d+) to pane-(\d+) \| corr=([^\s|]+) \
 // Map<corr, {corr, paneId, file, createdAt, readinessReason, status}>
 const handoffRegistry = new Map();
 
+// --- SSE client registry (v2.6) ---
+// Set of active response objects currently streaming /api/events. The
+// auto-handoff daemon iterates this set to broadcast autoHandoffSuggest /
+// autoHandoffUrgent events to dashboards in real time. Without this,
+// src/dashboard.html's SSE listeners at line ~2889 never fire because
+// the daemon only pushes to pendingAutoHandoffEvents (polling-only).
+const sseClients = new Set();
+function broadcastSSE(event) {
+  const payload = `data: ${JSON.stringify(event)}\n\n`;
+  for (const res of sseClients) {
+    try { res.write(payload); }
+    catch (e) { /* dead client — will be cleaned up on req.close */ }
+  }
+}
+
 // --- Worktree registry (Phase 3 — Agency Mode) ---
 // Map<paneId, {persona, worktreePath, branchName, baseCwd}>
 const worktreeRegistry = new Map();
@@ -599,6 +614,7 @@ function translateWatcherEvent(raw) {
 }
 
 // SSE: spawn an omni-watcher child, translate + forward events.
+// Also register in sseClients so the auto-handoff daemon can broadcast to us.
 function handleEvents(req, res) {
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -608,6 +624,7 @@ function handleEvents(req, res) {
   });
   const helloTs = new Date().toISOString();
   res.write(`event: hello\ndata: ${JSON.stringify({ ts: helloTs, timestamp: helloTs })}\n\n`);
+  sseClients.add(res);
 
   const child = spawn(process.execPath, [path.join(__dirname, 'omni-watcher.cjs')], {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -634,10 +651,12 @@ function handleEvents(req, res) {
   child.stderr.on('data', chunk => log(`watcher stderr: ${chunk.toString('utf8').trim()}`));
   child.on('exit', code => {
     res.write(`event: watcher_exit\ndata: ${JSON.stringify({ code, timestamp: new Date().toISOString() })}\n\n`);
+    sseClients.delete(res);
     res.end();
   });
 
   req.on('close', () => {
+    sseClients.delete(res);
     child.kill();
   });
 }
@@ -716,16 +735,25 @@ async function handlePostAutoHandoff(req, res, paneId) {
       wez.sendText(paneId, checkPrompt);
       wez.sendTextNoEnter(paneId, '\r');
 
-      for (let i = 0; i < 15; i++) {
+      // 30s (15 × 2s) was too short for Opus 4.7 xhigh effort — observed
+      // 40-60s response times on complex panes. Bumped to 120s (60 × 2s).
+      // Pane panes still thinking after 120s likely have a real problem.
+      const READINESS_POLL_ITERATIONS = 60;
+      for (let i = 0; i < READINESS_POLL_ITERATIONS; i++) {
         await sleep(2000);
         try {
           const text = wez.getFullText(paneId, 20) || '';
-          const match = text.match(/^(READY|NOT_READY):\s*(.+)$/m);
+          // Match only Claude's actual response (prefixed with ● bullet), not the prompt's placeholder.
+          const match = text.match(/●\s*(READY|NOT_READY):\s*(.+?)(?:\n|$)/);
           if (match) { readinessResult = { status: match[1], reason: match[2].trim() }; break; }
         } catch { /* pane may be transitioning */ }
       }
 
-      if (!readinessResult) return sendJson(res, 504, { error: 'readiness check timed out' });
+      if (!readinessResult) {
+        log(`[auto-handoff] pane-${paneId} readiness timed out after ${READINESS_POLL_ITERATIONS * 2}s`);
+        return sendJson(res, 504, { error: `readiness check timed out after ${READINESS_POLL_ITERATIONS * 2}s — pane may be mid-thinking, retry or pass force:true` });
+      }
+      log(`[auto-handoff] pane-${paneId} responded ${readinessResult.status}: ${readinessResult.reason.slice(0, 80)}`);
       if (readinessResult.status === 'NOT_READY') {
         return sendJson(res, 409, {
           error: 'pane declined handoff',
@@ -741,6 +769,7 @@ async function handlePostAutoHandoff(req, res, paneId) {
     const filename = 'handoff-' + isoForFilename() + '-' + corrShort + '.md';
 
     const instruction = `Use the /handoff skill to write a comprehensive session handoff to handoffs/${filename}. Corr: ${corr}. Focus: ${focus || 'general checkpoint'}. Include sections: Context, Current State, Open Threads, Next Steps, Constraints & Gotchas, Relevant Files. Do NOT include credentials, API keys, tokens, or private paths. Write the file, then stop.`;
+    log(`[auto-handoff] pane-${paneId} dispatching /handoff skill (corr=${corr})`);
     wez.sendText(paneId, instruction);
     wez.sendTextNoEnter(paneId, '\r');
 
@@ -757,23 +786,57 @@ async function handlePostAutoHandoff(req, res, paneId) {
         }
       } catch { /* file not ready yet */ }
     }
-    if (!fileFound) return sendJson(res, 504, { error: 'handoff generation timed out', partial: true });
+    if (!fileFound) {
+      log(`[auto-handoff] pane-${paneId} handoff file not written within 90s`);
+      return sendJson(res, 504, { error: 'handoff generation timed out', partial: true });
+    }
+    log(`[auto-handoff] pane-${paneId} handoff file found: ${filename}`);
 
     // Verify file has required sections
     const content = fs.readFileSync(filePath, 'utf8').slice(0, 4000);
     const sectionCount = ['## Current State', '## Next Steps', '## Open Threads', '## Context']
       .filter(h => content.includes(h)).length;
     if (sectionCount < 2) {
+      log(`[auto-handoff] pane-${paneId} handoff file incomplete (only ${sectionCount}/4 sections)`);
       return sendJson(res, 500, { error: 'handoff file incomplete', file: 'handoffs/' + filename, sections_found: sectionCount });
     }
 
-    // /clear the session
+    // WAIT FOR PANE TO BE TRULY IDLE before sending /clear. The /handoff skill
+    // triggers a Stop event, which fires stop hooks (e.g. memorymaster
+    // auto-ingest) that can start NEW turns — including opening permission
+    // prompts. If we send /clear while that's in flight, it gets queued
+    // behind the permission dialog and never executes. Poll status until
+    // "idle" for N consecutive checks, up to 60s.
+    let settledChecks = 0;
+    const SETTLE_REQUIRED = 3; // need 3 consecutive idle reads (~6s stable)
+    for (let i = 0; i < 30; i++) {
+      await sleep(2000);
+      try {
+        const panesNow = collectPanes();
+        const pNow = panesNow.find(x => x.pane_id === paneId);
+        if (pNow && pNow.status === 'idle') {
+          settledChecks++;
+          if (settledChecks >= SETTLE_REQUIRED) break;
+        } else {
+          settledChecks = 0;
+        }
+      } catch { /* transient */ }
+    }
+    log(`[auto-handoff] pane-${paneId} settled (idle ${settledChecks}x consecutive), sending /clear`);
+
+    // Send Ctrl+C first to cancel any pending permission dialog, then /clear
+    try { wez.sendTextNoEnter(paneId, '\x03'); } catch {}
+    await sleep(500);
     wez.sendText(paneId, '/clear');
     wez.sendTextNoEnter(paneId, '\r');
-    await sleep(3000);
+    await sleep(4000);
+    wez.sendTextNoEnter(paneId, '\r'); // belt-and-suspenders — /clear confirmation
 
     // Inject continuation
+    log(`[auto-handoff] pane-${paneId} injecting continuation prompt`);
     wez.sendText(paneId, `Continue your work from the handoff file at handoffs/${filename}. Read it FIRST, then proceed with your next step.`);
+    wez.sendTextNoEnter(paneId, '\r');
+    await sleep(500);
     wez.sendTextNoEnter(paneId, '\r');
 
     // Track
@@ -1497,8 +1560,14 @@ const AUTO_HANDOFF_COOLDOWN = parseInt(process.env.AUTO_HANDOFF_COOLDOWN_MS || S
 const autoHandoffSuggested = new Map(); // paneId -> lastSuggestedAt
 const pendingAutoHandoffEvents = [];
 
+// 2026-04-19 rate-reduction: skip the tick entirely if no SSE client is
+// connected. No one to broadcast to = nothing to deliver, so spending a
+// wezterm CLI call on collectPanes() is pure waste. Also skip if all panes
+// are already in cooldown (their Ctx status doesn't change faster than that).
+// Cuts ~6 wezterm CLI calls/min when the dashboard tab is closed.
 setInterval(() => {
   try {
+    if (sseClients.size === 0) return;
     const panes = collectPanes();
     for (const p of panes) {
       if (!p.is_claude) continue;
@@ -1526,6 +1595,13 @@ setInterval(() => {
 
       pendingAutoHandoffEvents.push(event);
       if (pendingAutoHandoffEvents.length > 20) pendingAutoHandoffEvents.shift();
+
+      // Broadcast to all connected SSE clients so dashboard.html's
+      // autoHandoffSuggest / autoHandoffUrgent listeners (line ~2889) fire
+      // in real time. Before this, the daemon only populated the polling
+      // array and the dashboard had no poll code, so the whole 🤖
+      // suggest/enforce toggle was silent end-to-end. Fixed 2026-04-17.
+      broadcastSSE(event);
 
       autoHandoffSuggested.set(p.pane_id, Date.now());
     }
