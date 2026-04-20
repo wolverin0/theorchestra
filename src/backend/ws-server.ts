@@ -26,6 +26,7 @@ import {
   removeWorktree,
 } from './worktree.js';
 import { parsePrdYaml, type PrdSpec } from './prd-bootstrap.js';
+import type { ChatStore } from './orchestrator/chat.js';
 import {
   DEFAULT_DASHBOARD_PORT,
   WS_PATH_PREFIX,
@@ -167,7 +168,11 @@ function matchSessionRoute(pathname: string): SessionRouteMatch | null {
   return { sessionId, suffix };
 }
 
-function makeHttpHandler(manager: PtyManager, bus: EventBus) {
+function makeHttpHandler(
+  manager: PtyManager,
+  bus: EventBus,
+  getChat: () => ChatStore | null,
+) {
   return async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     const method = req.method ?? 'GET';
     const url = req.url ?? '/';
@@ -339,6 +344,67 @@ function makeHttpHandler(manager: PtyManager, bus: EventBus) {
       } catch (err) {
         writeJson(res, 400, {
           error: 'remove_worktree_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    // Phase 7 — chat endpoints.
+    if (method === 'GET' && pathname === '/api/chat/messages') {
+      const chat = getChat();
+      if (!chat) {
+        writeJson(res, 503, { error: 'chat_not_ready', detail: 'orchestrator not yet attached' });
+        return;
+      }
+      const limit = Number.parseInt(query.get('limit') ?? '100', 10) || 100;
+      writeJson(res, 200, { messages: chat.latest(limit) });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/chat/ask') {
+      // User-initiated message. Rare in practice — most asks originate from
+      // the orchestrator — but exposed for symmetry.
+      try {
+        const body = (await readJsonBody(req)) as { text?: unknown };
+        if (typeof body.text !== 'string' || body.text.length === 0) {
+          writeJson(res, 400, { error: 'invalid_body', detail: 'text (string) required' });
+          return;
+        }
+        const chat = getChat();
+        if (!chat) {
+          writeJson(res, 503, { error: 'chat_not_ready' });
+          return;
+        }
+        writeJson(res, 201, chat.userMessage(body.text));
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'ask_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/chat/answer') {
+      try {
+        const body = (await readJsonBody(req)) as { in_reply_to?: unknown; text?: unknown };
+        if (typeof body.in_reply_to !== 'string' || typeof body.text !== 'string') {
+          writeJson(res, 400, {
+            error: 'invalid_body',
+            detail: 'in_reply_to (string) + text (string) required',
+          });
+          return;
+        }
+        const chat = getChat();
+        if (!chat) {
+          writeJson(res, 503, { error: 'chat_not_ready' });
+          return;
+        }
+        writeJson(res, 201, chat.answer(body.in_reply_to, body.text));
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'answer_failed',
           detail: err instanceof Error ? err.message : String(err),
         });
       }
@@ -706,17 +772,24 @@ function extractSessionId(pathname: string): SessionId | null {
 export interface StartServerOptions {
   port?: number;
   bus?: EventBus;
+  chat?: ChatStore;
 }
 
 export async function startServer(
   manager: PtyManager,
   portOrOpts?: number | StartServerOptions,
-): Promise<{ server: http.Server; bus: EventBus }> {
+): Promise<{ server: http.Server; bus: EventBus; setChat: (chat: ChatStore) => void }> {
   const opts: StartServerOptions =
     typeof portOrOpts === 'number' ? { port: portOrOpts } : portOrOpts ?? {};
   const port = opts.port ?? DEFAULT_DASHBOARD_PORT;
   const bus = opts.bus ?? new EventBus();
-  const server = http.createServer(makeHttpHandler(manager, bus));
+  // Chat is optional — orchestrator may attach it later via setChat(). The
+  // route handler checks the captured variable at call time (via closure).
+  let chatRef: ChatStore | null = opts.chat ?? null;
+  const setChat = (c: ChatStore): void => {
+    chatRef = c;
+  };
+  const server = http.createServer(makeHttpHandler(manager, bus, () => chatRef));
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (req, socket, head) => {
@@ -747,5 +820,5 @@ export async function startServer(
     });
   });
 
-  return { server, bus };
+  return { server, bus, setChat };
 }

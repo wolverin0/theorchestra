@@ -21,6 +21,7 @@ import {
   attachManifestWriter,
   respawnDeadSessions,
 } from '../src/backend/session-manifest.js';
+import { startOrchestrator } from '../src/backend/orchestrator/executor.js';
 import {
   DEFAULT_DASHBOARD_PORT,
   type PtySpawnOptions,
@@ -132,7 +133,7 @@ async function main(): Promise<void> {
   const defaultSession = spawnDefaultSession(manager);
 
   const port = Number.parseInt(process.env.THEORCHESTRA_PORT ?? '', 10) || DEFAULT_DASHBOARD_PORT;
-  const { server, bus } = await startServer(manager, port);
+  const { server, bus, setChat } = await startServer(manager, port);
 
   // Attach the Phase 3 event emitters. Each returns a disposer we'd call on
   // shutdown; we just drop them for now (process exit tears everything down).
@@ -144,6 +145,18 @@ async function main(): Promise<void> {
   attachTasksWatcher(bus, tasksPath);
   console.log(`[theorchestra] SSE emitters attached; tasks watcher on ${tasksPath}`);
   console.log(`[theorchestra] session manifests at ${manifestDir}`);
+
+  // Phase 7 — active orchestrator.
+  const decisionsDir =
+    process.env.THEORCHESTRA_DECISIONS_DIR ?? path.resolve('vault', '_orchestrator');
+  const configPath =
+    process.env.THEORCHESTRA_CONFIG_FILE ?? path.resolve('vault', '_orchestrator-config.md');
+  const orchestrator = startOrchestrator(manager, bus, {
+    decisionsDir,
+    configPath,
+  });
+  setChat(orchestrator.chat);
+  console.log(`[theorchestra] orchestrator attached; decisions log at ${decisionsDir}`);
 
   console.log(
     `[theorchestra] listening on :${port}, default session ${defaultSession.sessionId}`,
