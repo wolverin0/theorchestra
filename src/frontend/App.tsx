@@ -1,187 +1,95 @@
 import { useEffect, useRef, useState } from 'react';
-import type { SessionRecord } from '@shared/types';
-import { Terminal } from './Terminal';
-import { ChatPanel } from './ChatPanel';
 import { Login } from './Login';
 import { authedFetch, checkAuth, clearToken } from './auth';
+import { AppShell, type ShellTab } from './shell/AppShell';
+import { SessionsTab } from './tabs/SessionsTab';
+import { LiveTab } from './tabs/LiveTab';
+import { DesktopTab } from './tabs/DesktopTab';
+import { SpawnTab } from './tabs/SpawnTab';
 
-type Status =
-  | { kind: 'auth-checking' }
-  | { kind: 'auth-required' }
-  | { kind: 'loading' }
-  | { kind: 'waiting' }
-  | { kind: 'ready'; session: SessionRecord }
-  | { kind: 'error'; message: string };
+/**
+ * Top-level app. Two responsibilities only:
+ *   1. Auth bootstrap (login page vs. dashboard)
+ *   2. Render the correct tab body inside <AppShell>
+ *
+ * The heavy lifting (tab content, sidebar, etc.) lives in ./shell/ and ./tabs/.
+ */
 
-const POLL_INTERVAL_MS = 1000;
-const NARROW_VIEWPORT_PX = 800;
-
-type NarrowView = 'terminal' | 'chat';
+type AuthStatus = 'checking' | 'required' | 'ok' | 'error';
 
 export function App() {
-  const [status, setStatus] = useState<Status>({ kind: 'auth-checking' });
-  const [isNarrow, setIsNarrow] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth < NARROW_VIEWPORT_PX : false,
-  );
-  const [narrowView, setNarrowView] = useState<NarrowView>('terminal');
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('checking');
+  const [activeTab, setActiveTab] = useState<ShellTab>('sessions');
   const cancelledRef = useRef(false);
 
   useEffect(() => {
     cancelledRef.current = false;
 
-    const fetchOnce = async (): Promise<SessionRecord[]> => {
-      const res = await authedFetch('/api/sessions');
-      if (res.status === 401) {
-        throw new Error('unauthorized');
-      }
-      if (!res.ok) {
-        throw new Error(`GET /api/sessions failed: ${res.status}`);
-      }
-      return (await res.json()) as SessionRecord[];
-    };
-
-    const poll = async () => {
-      try {
-        const sessions = await fetchOnce();
-        if (cancelledRef.current) return;
-        if (sessions.length > 0) {
-          setStatus({ kind: 'ready', session: sessions[0]! });
-          return;
-        }
-        setStatus({ kind: 'waiting' });
-        setTimeout(poll, POLL_INTERVAL_MS);
-      } catch (err) {
-        if (cancelledRef.current) return;
-        const message = err instanceof Error ? err.message : String(err);
-        if (message === 'unauthorized') {
-          clearToken();
-          setStatus({ kind: 'auth-required' });
-          return;
-        }
-        setStatus({ kind: 'error', message });
-        setTimeout(poll, POLL_INTERVAL_MS);
-      }
-    };
-
-    const bootstrap = async () => {
+    const bootstrap = async (): Promise<void> => {
       const auth = await checkAuth();
       if (cancelledRef.current) return;
       if (auth.required && !auth.tokenValid) {
-        setStatus({ kind: 'auth-required' });
+        setAuthStatus('required');
         return;
       }
-      setStatus({ kind: 'loading' });
-      void poll();
+      setAuthStatus('ok');
     };
 
     void bootstrap();
-
     return () => {
       cancelledRef.current = true;
     };
   }, []);
 
+  // Detect mid-session 401s from any tab's fetches and kick back to login.
   useEffect(() => {
-    const onResize = () => {
-      setIsNarrow(window.innerWidth < NARROW_VIEWPORT_PX);
-    };
-    window.addEventListener('resize', onResize);
-    return () => {
-      window.removeEventListener('resize', onResize);
-    };
-  }, []);
+    if (authStatus !== 'ok') return;
+    const handle = setInterval(async () => {
+      try {
+        const res = await authedFetch('/api/sessions');
+        if (res.status === 401) {
+          clearToken();
+          setAuthStatus('required');
+        }
+      } catch {
+        /* transient network — don't drop auth */
+      }
+    }, 30_000);
+    return () => clearInterval(handle);
+  }, [authStatus]);
 
-  if (status.kind === 'auth-checking') {
+  if (authStatus === 'checking') {
     return (
-      <div className="app">
-        <div className="app-status">Checking auth...</div>
+      <div className="app-loading">
+        <div>Checking auth…</div>
       </div>
     );
   }
 
-  if (status.kind === 'auth-required') {
+  if (authStatus === 'required') {
     return (
       <Login
         onAuthenticated={() => {
-          // Re-bootstrap by reloading the status engine.
-          setStatus({ kind: 'loading' });
-          // Kick off a new poll loop.
-          const reboot = async () => {
-            try {
-              const res = await authedFetch('/api/sessions');
-              if (res.ok) {
-                const list = (await res.json()) as SessionRecord[];
-                if (list.length > 0) setStatus({ kind: 'ready', session: list[0]! });
-                else setStatus({ kind: 'waiting' });
-              } else {
-                setStatus({ kind: 'error', message: `HTTP ${res.status}` });
-              }
-            } catch (err) {
-              setStatus({
-                kind: 'error',
-                message: err instanceof Error ? err.message : String(err),
-              });
-            }
-          };
-          void reboot();
+          setAuthStatus('ok');
         }}
       />
     );
   }
 
-  if (status.kind === 'ready') {
-    if (isNarrow) {
-      const showChat = narrowView === 'chat';
-      return (
-        <div className="app app-narrow">
-          <div className="app-toggle">
-            <button
-              type="button"
-              className={narrowView === 'terminal' ? 'app-toggle-btn active' : 'app-toggle-btn'}
-              onClick={() => setNarrowView('terminal')}
-            >
-              Terminal
-            </button>
-            <button
-              type="button"
-              className={narrowView === 'chat' ? 'app-toggle-btn active' : 'app-toggle-btn'}
-              onClick={() => setNarrowView('chat')}
-            >
-              Chat
-            </button>
-          </div>
-          <div className="app-narrow-body">
-            {showChat ? (
-              <ChatPanel />
-            ) : (
-              <Terminal sessionId={status.session.sessionId} />
-            )}
-          </div>
-        </div>
-      );
-    }
+  if (authStatus === 'error') {
     return (
-      <div className="app app-wide">
-        <div className="app-terminal">
-          <Terminal sessionId={status.session.sessionId} />
-        </div>
-        <div className="app-chat">
-          <ChatPanel />
-        </div>
+      <div className="app-loading">
+        <div>Error loading dashboard.</div>
       </div>
     );
   }
 
-  const message =
-    status.kind === 'loading'
-      ? 'Loading...'
-      : status.kind === 'waiting'
-        ? 'Waiting for session...'
-        : `Error: ${status.message}`;
-
   return (
-    <div className="app">
-      <div className="app-status">{message}</div>
-    </div>
+    <AppShell activeTab={activeTab} onTabChange={setActiveTab}>
+      {activeTab === 'sessions' && <SessionsTab />}
+      {activeTab === 'live' && <LiveTab />}
+      {activeTab === 'desktop' && <DesktopTab />}
+      {activeTab === 'spawn' && <SpawnTab />}
+    </AppShell>
   );
 }

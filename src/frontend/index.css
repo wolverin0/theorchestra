@@ -1,18 +1,276 @@
+:root {
+  --bg-app: oklch(0.10 0.015 270);
+  --bg-surface: oklch(0.15 0.015 270);
+  --bg-elevated: oklch(0.18 0.015 270);
+  --bg-hover: oklch(0.21 0.015 270);
+  --bg-active: oklch(0.24 0.015 270);
+  --accent: oklch(0.65 0.24 270);
+  --accent-dim: oklch(0.45 0.18 270);
+  --green: oklch(0.75 0.18 155);
+  --red: oklch(0.65 0.22 25);
+  --yellow: oklch(0.80 0.18 85);
+  --text-primary: oklch(0.95 0.01 260);
+  --text-secondary: oklch(0.72 0.015 260);
+  --text-tertiary: oklch(0.50 0.015 260);
+  --glass: rgba(23, 23, 23, 0.85);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --radius-lg: 10px;
+}
+
 html,
 body,
 #root {
   height: 100vh;
   margin: 0;
   padding: 0;
-  background: #0b0b0b;
-  color: #ddd;
-  font-family: system-ui, sans-serif;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  font-size: 13px;
 }
 
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* --- Shell (U1): topbar + body --- */
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 16px;
+  height: 44px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--glass-border);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex-shrink: 0;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-width: 0;
+}
+
+.topbar-brand {
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.topbar-brand span {
+  color: var(--accent);
+}
+
+.topbar-menu {
+  display: flex;
+  gap: 14px;
+  color: var(--text-secondary);
+}
+
+.topbar-menu a {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 0.15s;
+  padding: 2px 0;
+  font-size: 13px;
+  user-select: none;
+}
+
+.topbar-menu a:hover {
+  color: var(--text-primary);
+}
+
+.topbar-menu a.active {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.topbar-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.topbar-time {
+  font-weight: 600;
+  color: var(--text-primary);
+  min-width: 64px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.dot.idle {
+  background: var(--green);
+  box-shadow: 0 0 6px oklch(0.75 0.18 155 / 0.5);
+}
+
+.dot.working {
+  background: var(--yellow);
+  animation: pulse 1.4s infinite;
+  box-shadow: 0 0 6px oklch(0.80 0.18 85 / 0.5);
+}
+
+.dot.permission {
+  background: var(--red);
+  animation: pulse 0.8s infinite;
+  box-shadow: 0 0 6px oklch(0.65 0.22 25 / 0.5);
+}
+
+.shell-body {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  min-height: 0;
+}
+
+/* --- Tab placeholders (U1) --- */
+
+.tab-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  padding: 48px 24px;
+  text-align: center;
+}
+
+.tab-placeholder-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.tab-placeholder-body {
+  font-size: 13px;
+  max-width: 480px;
+}
+
+/* --- Sessions tab (preserves U0 layout until U2 replaces it) --- */
+
+.sessions-tab {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+.sessions-tab-status {
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+}
+
+.sessions-tab-wide .app-terminal {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg-app);
+}
+
+.sessions-tab-wide .app-chat {
+  width: 400px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--glass-border);
+  background: var(--bg-surface);
+  display: flex;
+  flex-direction: column;
+}
+
+.sessions-tab-narrow {
+  flex-direction: column;
+}
+
+.sessions-tab-narrow .app-toggle {
+  display: flex;
+  gap: 1px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.sessions-tab-narrow .app-toggle-btn {
+  flex: 1;
+  padding: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sessions-tab-narrow .app-toggle-btn.active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+}
+
+.sessions-tab-narrow .app-narrow-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sessions-tab-narrow .app-narrow-body > * {
+  flex: 1;
+}
+
+/* --- App-wide loading / error fallbacks --- */
+
+.app-loading {
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
 }
 
 /* --- Login screen --- */
