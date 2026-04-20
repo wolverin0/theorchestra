@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { authedFetch } from '../auth';
 import { ActivitySidebar } from '../sidebar/ActivitySidebar';
 import { TasksStrip } from './TasksStrip';
+import { HandoffAlerts } from './HandoffAlerts';
 import type { SessionRecord } from '@shared/types';
 
 /**
@@ -149,6 +150,7 @@ export function AppShell({ activeTab, onTabChange, children }: AppShellProps) {
         <ActivitySidebar />
       </div>
       <TasksStrip />
+      <HandoffAlerts />
     </div>
   );
 }

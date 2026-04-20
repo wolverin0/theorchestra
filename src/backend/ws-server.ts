@@ -317,6 +317,31 @@ function makeHttpHandler(
 
     // Phase 5 — agency mode endpoints.
 
+    // Debug: publish a synthetic event onto the bus. Only enabled when
+    // THEORCHESTRA_DEBUG_EVENTS=1. Used by Playwright gates to exercise
+    // event-driven UI paths without relying on the emitter chain.
+    if (method === 'POST' && pathname === '/api/_debug/publish') {
+      if (process.env.THEORCHESTRA_DEBUG_EVENTS !== '1') {
+        writeJson(res, 404, { error: 'not_found' });
+        return;
+      }
+      try {
+        const body = (await readJsonBody(req)) as Record<string, unknown>;
+        if (typeof body.type !== 'string') {
+          writeJson(res, 400, { error: 'invalid_body', detail: 'type (string) required' });
+          return;
+        }
+        const evt = bus.publish(body as never);
+        writeJson(res, 201, evt);
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'publish_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
     if (method === 'GET' && pathname === '/api/tasks') {
       // Read the same active_tasks.md the watcher watches. Path is taken from
       // THEORCHESTRA_TASKS_FILE so gate harnesses can redirect.
