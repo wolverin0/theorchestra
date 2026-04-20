@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { authedFetch } from '../auth';
+import { ActivitySidebar } from '../sidebar/ActivitySidebar';
 import type { SessionRecord } from '@shared/types';
 
 /**
@@ -142,7 +143,10 @@ export function AppShell({ activeTab, onTabChange, children }: AppShellProps) {
           </div>
         </div>
       </header>
-      <main className="shell-body">{children}</main>
+      <div className="shell-split">
+        <main className="shell-body">{children}</main>
+        <ActivitySidebar />
+      </div>
     </div>
   );
 }

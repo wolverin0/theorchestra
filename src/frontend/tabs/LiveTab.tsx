@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import type { SessionRecord } from '@shared/types';
 import { authedFetch } from '../auth';
 import { Terminal } from '../Terminal';
-import { ChatPanel } from '../ChatPanel';
 
 /**
- * U2 interim — the Live tab temporarily hosts the full-screen Terminal +
- * ChatPanel so those features stay live while the Sessions tab hosts the
- * pane-card grid. U3 replaces this with the activity sidebar (OmniClaude /
- * A2A / Events) and moves the chat into that sidebar.
+ * Live tab — single-pane focus view. Picks the most-recently spawned
+ * session and renders a full-height xterm for it, so the user can
+ * interact with that one pane without the grid distraction. The activity
+ * sidebar still lives on the right via AppShell.
+ *
+ * U6 can add a pane-picker on top so the user chooses which pane to focus.
  */
 
 export function LiveTab() {
@@ -23,13 +24,13 @@ export function LiveTab() {
         if (!res.ok) return;
         const list = (await res.json()) as SessionRecord[];
         if (cancelledRef.current) return;
-        setSession(list[0] ?? null);
+        setSession(list[list.length - 1] ?? null);
       } catch {
         /* transient */
       }
     };
     void poll();
-    const handle = setInterval(() => void poll(), 3000);
+    const handle = setInterval(() => void poll(), 5000);
     return () => {
       cancelledRef.current = true;
       clearInterval(handle);
@@ -46,12 +47,13 @@ export function LiveTab() {
   }
 
   return (
-    <div className="live-tab">
-      <div className="live-tab-terminal">
-        <Terminal sessionId={session.sessionId} />
+    <div className="live-tab live-tab-single">
+      <div className="live-tab-header">
+        Focused pane: <strong>{session.tabTitle || session.cli}</strong>
+        <span className="live-tab-id">{session.sessionId.slice(0, 8)}</span>
       </div>
-      <div className="live-tab-chat">
-        <ChatPanel />
+      <div className="live-tab-body">
+        <Terminal sessionId={session.sessionId} />
       </div>
     </div>
   );
