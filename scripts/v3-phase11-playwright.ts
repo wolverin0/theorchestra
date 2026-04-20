@@ -90,6 +90,8 @@ async function setupSuite(): Promise<Suite> {
       THEORCHESTRA_CONFIG_FILE: path.join(tmpDir, '.no-config.md'),
       THEORCHESTRA_TASKS_FILE: path.join(tmpDir, '.no-tasks.md'),
       THEORCHESTRA_DEBUG_EVENTS: '1',
+      THEORCHESTRA_MEMORYMASTER_INBOX: '1',
+      THEORCHESTRA_MEMORYMASTER_INBOX_FILE: path.join(tmpDir, '_memorymaster', 'inbox.jsonl'),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -284,12 +286,13 @@ async function main(): Promise<void> {
         const broadcastInput = s.page.locator('input[aria-label="Broadcast message"]');
         await broadcastInput.waitFor({ timeout: 5000 });
         await s.page.waitForFunction(
-          (n) => {
-            const el = document.querySelector<HTMLInputElement>(
-              'input[aria-label="Broadcast message"]',
-            );
-            return !!el && (el.placeholder ?? '').includes(`${n} session`);
-          },
+          // Runs in the browser context; `document` is the page's DOM.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ((n: number) => {
+            // @ts-expect-error document is browser-only
+            const el: any = document.querySelector('input[aria-label="Broadcast message"]');
+            return !!el && String(el.placeholder ?? '').includes(`${n} session`);
+          }) as unknown as (arg: number) => boolean,
           expected,
           { timeout: 8000 },
         );
@@ -462,6 +465,30 @@ async function main(): Promise<void> {
         await s.page.setViewportSize({ width: 1280, height: 900 });
         await wait(200);
         return 'mobile shell reachable, 5 screenshots captured';
+      },
+    },
+    {
+      name: 'UI.14 MemoryMaster bridge writes ctx_threshold event to inbox.jsonl',
+      run: async () => {
+        const inboxFile = path.join(s.tmpDir, '_memorymaster', 'inbox.jsonl');
+        if (!fs.existsSync(inboxFile)) {
+          throw new Error(`inbox file not created at ${inboxFile}`);
+        }
+        const raw = fs.readFileSync(inboxFile, 'utf-8').trim();
+        if (!raw) throw new Error('inbox file exists but is empty');
+        const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+        const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+        const ctxLine = parsed.find((p) => p.predicate === 'ctx_threshold_crossed');
+        if (!ctxLine) {
+          throw new Error(`no ctx_threshold_crossed line in inbox; got ${lines.length} lines`);
+        }
+        if (ctxLine.source_agent !== 'theorchestra') {
+          throw new Error(`unexpected source_agent: ${String(ctxLine.source_agent)}`);
+        }
+        if (typeof ctxLine.idempotency_key !== 'string' || !ctxLine.idempotency_key) {
+          throw new Error('missing idempotency_key');
+        }
+        return `inbox has ${lines.length} line(s); ctx_threshold captured`;
       },
     },
     {

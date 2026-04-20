@@ -22,6 +22,7 @@ import {
   respawnDeadSessions,
 } from '../src/backend/session-manifest.js';
 import { startOrchestrator } from '../src/backend/orchestrator/executor.js';
+import { attachFromEnv as attachMemoryMasterBridge } from '../src/backend/memorymaster-bridge.js';
 import {
   TelegramPusher,
   configFromEnv as telegramConfigFromEnv,
@@ -201,6 +202,10 @@ async function main(): Promise<void> {
   });
   setChat(orchestrator.chat);
   console.log(`[theorchestra] orchestrator attached; decisions log at ${decisionsDir}`);
+
+  // v3.0-native MemoryMaster bridge (opt-in via THEORCHESTRA_MEMORYMASTER_INBOX=1).
+  // Writes high-signal events as JSONL lines to vault/_memorymaster/inbox.jsonl.
+  attachMemoryMasterBridge(bus);
 
   console.log(
     `[theorchestra] listening on :${port}, default session ${defaultSession.sessionId}`,
