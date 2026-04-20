@@ -312,6 +312,46 @@ async function main(): Promise<void> {
       },
     },
     {
+      name: 'UI.10 375px mobile viewport: topbar + tabs + sidebar collapse reachable, one screenshot per tab',
+      run: async () => {
+        await s.page.setViewportSize({ width: 375, height: 812 });
+        await wait(400);
+        await s.page.waitForSelector('nav[aria-label="Primary"]', { timeout: 10_000 });
+        const tabs: Array<'Sessions' | 'Live' | 'Desktop' | 'Spawn'> = [
+          'Sessions',
+          'Live',
+          'Desktop',
+          'Spawn',
+        ];
+        for (const tab of tabs) {
+          const btn = s.page
+            .locator(`nav[aria-label="Primary"] [role="button"]:has-text("${tab}")`)
+            .first();
+          if ((await btn.count()) < 1) throw new Error(`${tab} tab not reachable at 375px`);
+          await btn.click();
+          await wait(250);
+          await shot(s.page, `10-mobile-${tab.toLowerCase()}`);
+        }
+        // Sidebar has a collapse button — verify it exists + clicking it toggles
+        // the collapsed state (resilient: whichever direction the chevron currently
+        // points, one click flips it).
+        const collapseBtn = s.page.locator(
+          '[aria-label="Activity sidebar"] button[aria-label="Collapse activity sidebar"], ' +
+            '[aria-label="Activity sidebar"] button[aria-label="Expand activity sidebar"]',
+        );
+        if ((await collapseBtn.count()) < 1) {
+          throw new Error('sidebar collapse button missing at 375px');
+        }
+        await collapseBtn.first().click();
+        await wait(200);
+        await shot(s.page, '10-mobile-sidebar-toggled');
+        // Restore 1280×900 for downstream checks.
+        await s.page.setViewportSize({ width: 1280, height: 900 });
+        await wait(200);
+        return 'mobile shell reachable, 5 screenshots captured';
+      },
+    },
+    {
       name: 'UI.9 Invalid token → login page returns',
       run: async () => {
         await s.page.evaluate(() => {

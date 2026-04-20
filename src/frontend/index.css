@@ -2039,3 +2039,49 @@ body,
   outline: none;
   border-color: #7eb8ff;
 }
+
+/* --- Narrow-viewport (≤480px, includes 375px iPhone) --- */
+
+@media (max-width: 480px) {
+  .topbar {
+    gap: 8px;
+    padding: 0 8px;
+  }
+  .topbar-left {
+    gap: 10px;
+    flex: 1 1 auto;
+    overflow: hidden;
+  }
+  .topbar-menu {
+    gap: 8px;
+  }
+  .topbar-menu a {
+    font-size: 12px;
+    padding: 2px 4px;
+  }
+  .topbar-right {
+    gap: 6px;
+  }
+  .topbar-stat {
+    font-size: 11px;
+  }
+  .topbar-time {
+    display: none;
+  }
+  .topbar-brand {
+    font-size: 12px;
+  }
+  .activity-sidebar:not(.collapsed) {
+    width: 36px;
+    align-items: center;
+  }
+  .activity-sidebar:not(.collapsed) .as-head {
+    justify-content: center;
+    border-bottom: none;
+    padding: 10px 0 8px;
+  }
+  .activity-sidebar:not(.collapsed) .as-panels {
+    display: none;
+  }
+}
+
