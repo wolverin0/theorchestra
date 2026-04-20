@@ -353,11 +353,38 @@ export function DesktopTab() {
 
   const applyLayout = (mode: LayoutMode): void => {
     setLayout(mode);
-    if (mode === 'tile') dtTile();
-    else if (mode === 'cascade') dtCascade();
-    else if (mode === 'stack') dtStack();
-    else if (mode === 'show-all') dtShowAll();
+    // Defer one frame so the state update + any pending render settle
+    // before we read offsetWidth/offsetHeight. Without this, clicking
+    // a layout button immediately after mount used stale `offsetWidth=0`.
+    requestAnimationFrame(() => {
+      if (mode === 'tile') dtTile();
+      else if (mode === 'cascade') dtCascade();
+      else if (mode === 'stack') dtStack();
+      else if (mode === 'show-all') dtShowAll();
+    });
   };
+
+  // Re-apply the current layout when the area first renders with a real
+  // size (offsetWidth > 0) OR when the visible session count changes
+  // (new pane spawned, existing pane killed). Without this, the default
+  // layout button ("Tile") was visually active but never arranged the
+  // windows — they sat in the `cascadeDefault` positions forever.
+  const prevVisibleCount = useRef(-1);
+  useEffect(() => {
+    const visCount = sessions.filter((s) => !wins[s.sessionId]?.minimized).length;
+    if (visCount === prevVisibleCount.current) return;
+    prevVisibleCount.current = visCount;
+    if (visCount === 0) return;
+    // Only auto-arrange on count-change, not on every re-render — otherwise
+    // user's manual drag would snap back. Debounce one rAF.
+    requestAnimationFrame(() => {
+      if (layout === 'tile') dtTile();
+      else if (layout === 'cascade') dtCascade();
+      else if (layout === 'stack') dtStack();
+      else if (layout === 'show-all') dtShowAll();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions.length]);
 
   return (
     <div className="desktop-wrap">
