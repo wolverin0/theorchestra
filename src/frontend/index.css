@@ -1484,6 +1484,222 @@ body,
   color: var(--red);
 }
 
+.dwin-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.dwin-btn-primary:hover {
+  background: oklch(0.72 0.23 270);
+}
+
+.dwin-btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Handoff + auto-handoff header trio */
+.dwin-header .handoff-btn,
+.dwin-header .handoff-history-btn,
+.dwin-header .auto-handoff-btn {
+  font-size: 13px;
+  padding: 2px 4px;
+}
+
+.dwin-header .handoff-btn:hover {
+  background: oklch(0.65 0.24 270 / 0.25);
+  color: var(--accent);
+}
+
+.dwin-header .auto-handoff-btn:hover {
+  background: oklch(0.65 0.22 25 / 0.25);
+}
+
+.dwin-persona {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: oklch(0.25 0.04 270);
+  color: oklch(0.85 0.08 270);
+  border: 1px solid oklch(0.35 0.08 270);
+  letter-spacing: 0.3px;
+}
+
+.dwin-a2a-slot {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* --- Handoff + history popovers --- */
+
+.dwin-handoff-popover,
+.dwin-history-popover {
+  position: absolute;
+  top: 36px;
+  right: 6px;
+  z-index: 30;
+  width: 280px;
+  background: var(--bg-surface);
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.dwin-handoff-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.dwin-handoff-popover select,
+.dwin-handoff-popover textarea {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.dwin-handoff-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.dwin-history-popover {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.dwin-history-entry {
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid var(--glass-border);
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  background: var(--bg-base);
+}
+
+.dwin-history-entry + .dwin-history-entry {
+  margin-top: 4px;
+}
+
+.dwin-history-filename {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.dwin-history-meta {
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.dwin-history-empty {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* Relative-positioned card so popovers anchor correctly. */
+.dwin {
+  position: relative;
+}
+
+/* --- Keys strip --- */
+
+.dwin-keys {
+  display: flex;
+  gap: 3px;
+  padding: 4px 8px;
+  border-top: 1px solid var(--glass-border);
+  background: oklch(0.14 0 0 / 0.6);
+  flex-wrap: wrap;
+}
+
+.dwin-key-btn {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  cursor: pointer;
+  min-width: 22px;
+  text-align: center;
+}
+
+.dwin-key-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.dwin-key-btn:active {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* --- Prompt row extra buttons --- */
+
+.dwin-btn-q {
+  background: oklch(0.65 0.2 195 / 0.15);
+  color: oklch(0.78 0.15 195);
+  border: 1px solid oklch(0.65 0.2 195 / 0.35);
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.dwin-btn-q:hover {
+  background: oklch(0.65 0.2 195 / 0.3);
+}
+
+.dwin-btn-ctx {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  padding: 4px 8px;
+  font-size: 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.dwin-btn-mode {
+  background: var(--bg-hover);
+  color: var(--yellow);
+  border: 1px solid oklch(0.7 0.15 80 / 0.35);
+  padding: 4px 8px;
+  font-size: 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.dwin-btn-mode:hover {
+  background: oklch(0.7 0.15 80 / 0.2);
+}
+
+.dwin-flash {
+  padding: 4px 10px;
+  font-size: 10px;
+  color: var(--accent);
+  background: oklch(0.22 0.04 270);
+  border-top: 1px solid var(--glass-border);
+}
+
 .dwin-body {
   flex: 1;
   min-height: 120px;

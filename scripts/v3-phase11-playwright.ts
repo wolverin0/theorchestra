@@ -468,6 +468,80 @@ async function main(): Promise<void> {
       },
     },
     {
+      name: 'UI.17 Pane-card restored controls — ↗ 📜 🔄 header trio + keys strip + Q+/Ctx/Mode prompt buttons all present',
+      run: async () => {
+        await s.page.locator('nav[aria-label="Primary"] [role="button"]:has-text("Sessions")').click();
+        await s.page.waitForSelector('.pane-grid-tile, .pane-grid-show-all', { timeout: 5000 });
+        const card = s.page.locator('.dwin').first();
+        await card.waitFor({ timeout: 5000 });
+        // Header trio
+        if ((await card.locator('button.handoff-btn').count()) < 1) throw new Error('↗ handoff-btn missing');
+        if ((await card.locator('button.handoff-history-btn').count()) < 1) throw new Error('📜 handoff-history-btn missing');
+        if ((await card.locator('button.auto-handoff-btn').count()) < 1) throw new Error('🔄 auto-handoff-btn missing');
+        // Keys strip — ESC and all arrows
+        for (const label of ['ESC', '↑', '↓', '←', '→', 'Tab', '^C']) {
+          if ((await card.locator(`.dwin-key-btn:has-text("${label}")`).count()) < 1) {
+            throw new Error(`key-strip button "${label}" missing`);
+          }
+        }
+        // Prompt row extras
+        if ((await card.locator('button.dwin-btn-q').count()) < 1) throw new Error('Q+ button missing');
+        if ((await card.locator('button.dwin-btn-ctx').count()) < 1) throw new Error('Ctx button missing');
+        if ((await card.locator('button.dwin-btn-mode').count()) < 1) throw new Error('Mode button missing');
+        await shot(s.page, '17-pane-card-restored');
+        return 'all v2.7 header trio + keys strip + Q+/Ctx/Mode buttons present';
+      },
+    },
+    {
+      name: 'UI.18 Click ESC key-strip button sends \\x1b to pane',
+      run: async () => {
+        const listRes = await fetch(`http://127.0.0.1:${s.port}/api/sessions`, {
+          headers: { Authorization: `Bearer ${s.token}` },
+        });
+        const list = (await listRes.json()) as Array<{ sessionId: string }>;
+        const sid = list[0]?.sessionId;
+        if (!sid) throw new Error('no session for ESC click test');
+        const beforeRes = await fetch(
+          `http://127.0.0.1:${s.port}/api/sessions/${sid}/output?lines=50`,
+          { headers: { Authorization: `Bearer ${s.token}` } },
+        );
+        const before = (await beforeRes.json()) as { lines: string[] };
+        const beforeCount = before.lines.join('').length;
+        const card = s.page.locator('.dwin').first();
+        // We don't try to assert a visible effect in cmd.exe — just that the
+        // browser's click path to /api/sessions/:id/key completes.
+        const pending: string[] = [];
+        s.page.on('request', (r) => {
+          if (r.url().includes('/key')) pending.push(r.url());
+        });
+        await card.locator('.dwin-key-btn:has-text("ESC")').click();
+        await wait(400);
+        if (pending.length === 0) throw new Error('ESC click did not fire POST /key');
+        await shot(s.page, '18-esc-click-fired');
+        return `ESC click fired ${pending.length} /key request(s); output delta ${beforeCount}`;
+      },
+    },
+    {
+      name: 'UI.19 Click ↗ opens handoff popover with target list + instruction textarea',
+      run: async () => {
+        const card = s.page.locator('.dwin').first();
+        await card.locator('button.handoff-btn').click();
+        await s.page.waitForSelector('.dwin-handoff-popover', { timeout: 3000 });
+        const targetSelect = s.page.locator('.dwin-handoff-popover select');
+        if ((await targetSelect.count()) < 1) throw new Error('target select missing in popover');
+        const optionCount = await s.page.locator('.dwin-handoff-popover select option').count();
+        // "— pick target pane —" placeholder + N peer options
+        if (optionCount < 2) throw new Error(`expected ≥2 options (placeholder + peers), got ${optionCount}`);
+        const textarea = s.page.locator('.dwin-handoff-popover textarea');
+        if ((await textarea.count()) < 1) throw new Error('instruction textarea missing');
+        await shot(s.page, '19-handoff-popover');
+        // Close popover so it doesn't block downstream checks.
+        await s.page.locator('.dwin-handoff-popover button:has-text("Cancel")').click();
+        await wait(200);
+        return `popover opened with ${optionCount - 1} peer target(s)`;
+      },
+    },
+    {
       name: 'UI.16 POST /api/a2a/handoff sends prompt to source pane; GET /api/handoffs lists handoffs dir',
       run: async () => {
         const listRes = await fetch(`http://127.0.0.1:${s.port}/api/sessions`, {

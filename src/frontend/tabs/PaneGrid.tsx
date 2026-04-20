@@ -72,6 +72,7 @@ export function PaneGrid({ layout = 'tile' }: PaneGridProps) {
         <div role="listitem" key={s.sessionId} className="pane-grid-cell">
           <PaneCard
             session={s}
+            peerSessions={sessions}
             active={s.sessionId === activeId}
             onSelect={() => setActiveId(s.sessionId)}
             onKill={() => void refresh()}

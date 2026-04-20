@@ -3,19 +3,21 @@ import type { SessionRecord } from '@shared/types';
 import { authedFetch } from '../auth';
 
 /**
- * U2 — pane-card. Faithful port of v2.x `.dwin` (dashboard window):
+ * U2 — pane-card. Port of v2.x `.dwin` (dashboard window).
  *
- *   ┌─────────────────────────────────────────────┐
- *   │ ● ● ●   project-name          [STATUS] [✕] │  ← header
- *   ├─────────────────────────────────────────────┤
- *   │ last 20 rendered text lines                 │  ← body (monospace)
- *   │                                             │
- *   ├─────────────────────────────────────────────┤
- *   │ [prompt input...................] [Send]   │  ← prompt
- *   └─────────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────────────┐
+ *   │ ● ● ●  name  [a2a] [STATUS] [ctx%] [persona]  ↗ 📜 🔄 ✕  │  ← header
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │ last 20 rendered text lines                              │  ← body
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │ ESC · ↑ · ↓ · ← · → · Tab · Ctrl+C                       │  ← keys strip
+ *   ├──────────────────────────────────────────────────────────┤
+ *   │ [prompt ...............] Send · Q+ · Ctx · Mode          │  ← prompt row
+ *   └──────────────────────────────────────────────────────────┘
  *
- * Polls `/api/sessions/:id/status` every 2s and re-renders the body + badge.
- * Prompt posts to `/api/sessions/:id/prompt` and clears on success.
+ * Polls `/api/sessions/:id/status` every 2s. Prompt row posts to `/prompt`;
+ * keys strip + Mode button post to `/key`. Handoff trio talks to
+ * `/api/a2a/handoff`, `/api/handoffs`, `/api/sessions/:id/auto-handoff`.
  */
 
 interface StatusDetail {
@@ -25,12 +27,21 @@ interface StatusDetail {
   lastOutputAt: string | null;
 }
 
+interface HandoffEntry {
+  filename: string;
+  mtime: string | null;
+  size: number;
+  head: string;
+  sent: string | null;
+  corr: string | null;
+}
+
 interface PaneCardProps {
   session: SessionRecord;
+  peerSessions?: SessionRecord[];
   active?: boolean;
   onSelect?: () => void;
   onKill?: () => void;
-  onHandoff?: () => void;
 }
 
 function projectName(cwd: string, tabTitle: string | undefined): string {
@@ -46,11 +57,36 @@ function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
-export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneCardProps) {
+/** Common payload for /key — small helper so every button reads as 2 lines. */
+async function sendKey(sessionId: string, key: string): Promise<void> {
+  await authedFetch(`/api/sessions/${encodeURIComponent(sessionId)}/key`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key }),
+  });
+}
+
+const KEYS_STRIP: ReadonlyArray<{ label: string; key: string; title: string }> = [
+  { label: 'ESC', key: 'escape', title: 'Send Escape — close Claude menu' },
+  { label: '↑', key: 'up', title: 'Arrow up' },
+  { label: '↓', key: 'down', title: 'Arrow down' },
+  { label: '←', key: 'left', title: 'Arrow left' },
+  { label: '→', key: 'right', title: 'Arrow right' },
+  { label: 'Tab', key: 'tab', title: 'Tab (next field / autocomplete)' },
+  { label: '^C', key: 'ctrl+c', title: 'Ctrl+C — interrupt' },
+];
+
+export function PaneCard({ session, peerSessions, active, onSelect, onKill }: PaneCardProps) {
   const [detail, setDetail] = useState<StatusDetail | null>(null);
   const [promptText, setPromptText] = useState('');
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [handoffOpen, setHandoffOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [handoffTarget, setHandoffTarget] = useState<string>('');
+  const [handoffInstr, setHandoffInstr] = useState('');
+  const [history, setHistory] = useState<HandoffEntry[] | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const cancelledRef = useRef(false);
 
@@ -58,7 +94,9 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
     cancelledRef.current = false;
     const poll = async (): Promise<void> => {
       try {
-        const res = await authedFetch(`/api/sessions/${encodeURIComponent(session.sessionId)}/status`);
+        const res = await authedFetch(
+          `/api/sessions/${encodeURIComponent(session.sessionId)}/status`,
+        );
         if (!res.ok) return;
         const data = (await res.json()) as StatusDetail;
         if (!cancelledRef.current) setDetail(data);
@@ -74,12 +112,17 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
     };
   }, [session.sessionId]);
 
-  // Auto-scroll to the bottom when new output arrives.
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [detail?.lastLines]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 2500);
+    return () => clearTimeout(t);
+  }, [flash]);
 
   const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
@@ -95,11 +138,8 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
           body: JSON.stringify({ text: promptText }),
         },
       );
-      if (!res.ok) {
-        setErr(`send failed: HTTP ${res.status}`);
-      } else {
-        setPromptText('');
-      }
+      if (!res.ok) setErr(`send failed: HTTP ${res.status}`);
+      else setPromptText('');
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
     } finally {
@@ -115,7 +155,74 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
       });
       onKill?.();
     } catch {
-      /* user will see card disappear once backend list refreshes */
+      /* pane vanishes on next /sessions poll */
+    }
+  };
+
+  const handleHandoffSubmit = async (): Promise<void> => {
+    if (!handoffTarget || !handoffInstr.trim()) return;
+    try {
+      const res = await authedFetch('/api/a2a/handoff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_session_id: session.sessionId,
+          target_session_id: handoffTarget,
+          instruction: handoffInstr.trim(),
+        }),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { corr: string };
+        setFlash(`↗ handoff ${body.corr} dispatched`);
+        setHandoffOpen(false);
+        setHandoffInstr('');
+      } else {
+        const body = (await res.json().catch(() => ({}))) as { detail?: string };
+        setFlash(`handoff failed: ${body.detail ?? res.status}`);
+      }
+    } catch (e2) {
+      setFlash(`handoff error: ${e2 instanceof Error ? e2.message : String(e2)}`);
+    }
+  };
+
+  const handleOpenHistory = async (): Promise<void> => {
+    setHistoryOpen(true);
+    try {
+      const res = await authedFetch(
+        `/api/handoffs?session=${encodeURIComponent(session.sessionId)}`,
+      );
+      if (!res.ok) {
+        setHistory([]);
+        return;
+      }
+      const body = (await res.json()) as { handoffs: HandoffEntry[] };
+      setHistory(body.handoffs);
+    } catch {
+      setHistory([]);
+    }
+  };
+
+  const handleAutoHandoff = async (): Promise<void> => {
+    if (
+      !window.confirm(
+        `Handoff & Clear pane ${shortId(session.sessionId)}? This triggers the /handoff skill then /clear.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await authedFetch(
+        `/api/sessions/${encodeURIComponent(session.sessionId)}/auto-handoff`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        },
+      );
+      if (res.ok) setFlash('🔄 auto-handoff started');
+      else setFlash(`auto-handoff failed: HTTP ${res.status}`);
+    } catch (e2) {
+      setFlash(`auto-handoff error: ${e2 instanceof Error ? e2.message : String(e2)}`);
     }
   };
 
@@ -123,6 +230,7 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
   const statusLabel = status === 'exited' ? 'EXITED' : status.toUpperCase();
   const lines = detail?.lastLines ?? [];
   const name = projectName(session.cwd, session.tabTitle);
+  const peers = (peerSessions ?? []).filter((s) => s.sessionId !== session.sessionId);
 
   return (
     <div className={`dwin ${active ? 'active' : ''}`} onClick={onSelect}>
@@ -135,25 +243,54 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
         <span className="dwin-name" title={session.cwd}>
           {name}
         </span>
+        <span className="dwin-a2a-slot" aria-label="A2A correlations" />
         <span
           className={`dwin-st ${status}`}
           title={`status: ${status}${detail?.exitCode !== null && detail?.exitCode !== undefined ? ` (exit ${detail.exitCode})` : ''}`}
         >
           {statusLabel}
         </span>
-        {onHandoff && (
-          <button
-            type="button"
-            className="dwin-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              onHandoff();
-            }}
-            title="Trigger auto-handoff"
-          >
-            ↗
-          </button>
+        {session.persona && (
+          <span className="dwin-persona" title={`persona: ${session.persona}`}>
+            {session.persona}
+          </span>
         )}
+        <button
+          type="button"
+          className="dwin-btn handoff-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            setHandoffOpen((v) => !v);
+          }}
+          title="Handoff to another pane"
+          aria-label="Open handoff picker"
+        >
+          ↗
+        </button>
+        <button
+          type="button"
+          className="dwin-btn handoff-history-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleOpenHistory();
+          }}
+          title="Handoff history"
+          aria-label="Open handoff history"
+        >
+          📜
+        </button>
+        <button
+          type="button"
+          className="dwin-btn auto-handoff-btn"
+          onClick={(e) => {
+            e.stopPropagation();
+            void handleAutoHandoff();
+          }}
+          title="Handoff & Clear (auto-handoff)"
+          aria-label="Auto-handoff (handoff + clear)"
+        >
+          🔄
+        </button>
         <button
           type="button"
           className="dwin-btn dwin-btn-kill"
@@ -167,6 +304,88 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
           ✕
         </button>
       </div>
+
+      {handoffOpen && (
+        <div
+          className="dwin-handoff-popover"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-label="Handoff picker"
+        >
+          <div className="dwin-handoff-title">Handoff from {name} to…</div>
+          <select
+            aria-label="Handoff target"
+            value={handoffTarget}
+            onChange={(e) => setHandoffTarget(e.target.value)}
+          >
+            <option value="">— pick target pane —</option>
+            {peers.map((p) => (
+              <option key={p.sessionId} value={p.sessionId}>
+                {projectName(p.cwd, p.tabTitle)} ({shortId(p.sessionId)})
+              </option>
+            ))}
+          </select>
+          <textarea
+            aria-label="Handoff instruction"
+            placeholder="Instruction for the target pane…"
+            value={handoffInstr}
+            onChange={(e) => setHandoffInstr(e.target.value)}
+            rows={3}
+          />
+          <div className="dwin-handoff-actions">
+            <button
+              type="button"
+              onClick={() => setHandoffOpen(false)}
+              className="dwin-btn"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleHandoffSubmit()}
+              disabled={!handoffTarget || !handoffInstr.trim()}
+              className="dwin-btn dwin-btn-primary"
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
+
+      {historyOpen && (
+        <div
+          className="dwin-history-popover"
+          onClick={(e) => e.stopPropagation()}
+          role="dialog"
+          aria-label="Handoff history"
+        >
+          <div className="dwin-handoff-title">Handoffs in {name}/handoffs/</div>
+          {history === null && <div className="dwin-history-empty">loading…</div>}
+          {history !== null && history.length === 0 && (
+            <div className="dwin-history-empty">(no handoffs found)</div>
+          )}
+          {history !== null &&
+            history.map((h) => (
+              <div className="dwin-history-entry" key={h.filename}>
+                <div className="dwin-history-filename">{h.filename}</div>
+                <div className="dwin-history-meta">
+                  {h.sent ?? h.mtime ?? '?'}
+                  {h.corr ? ` · corr=${h.corr}` : ''} · {h.size}B
+                </div>
+              </div>
+            ))}
+          <div className="dwin-handoff-actions">
+            <button
+              type="button"
+              onClick={() => setHistoryOpen(false)}
+              className="dwin-btn"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="dwin-body" ref={bodyRef}>
         {lines.length === 0 ? (
           <div className="dwin-body-empty">(no output yet)</div>
@@ -178,6 +397,27 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
           ))
         )}
       </div>
+
+      <div
+        className="dwin-keys"
+        role="group"
+        aria-label="Special keys"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {KEYS_STRIP.map((k) => (
+          <button
+            key={k.key}
+            type="button"
+            className="dwin-key-btn"
+            title={k.title}
+            aria-label={k.title}
+            onClick={() => void sendKey(session.sessionId, k.key)}
+          >
+            {k.label}
+          </button>
+        ))}
+      </div>
+
       <form className="dwin-prompt" onSubmit={handleSubmit} onClick={(e) => e.stopPropagation()}>
         <input
           type="text"
@@ -191,8 +431,38 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
         <button type="submit" disabled={sending || !promptText.trim() || status === 'exited'}>
           Send
         </button>
+        <button
+          type="button"
+          className="dwin-btn dwin-btn-q"
+          title="Add to queue — drains when pane goes idle (placeholder, v3.0 wiring pending)"
+          aria-label="Queue prompt"
+          onClick={() => setFlash('Q+ queue not wired yet (v3.0 TODO)')}
+        >
+          Q+
+        </button>
+        <button
+          type="button"
+          className="dwin-btn dwin-btn-ctx"
+          title="Inject context from other panes (placeholder, v3.0 wiring pending)"
+          aria-label="Inject context"
+          onClick={() => setFlash('Ctx inject not wired yet (v3.0 TODO)')}
+        >
+          Ctx
+        </button>
+        <button
+          type="button"
+          className="dwin-btn dwin-btn-mode"
+          title="Toggle permission mode (Alt+M)"
+          aria-label="Toggle permission mode"
+          onClick={() => void sendKey(session.sessionId, 'alt+m')}
+        >
+          Mode
+        </button>
       </form>
+
+      {flash && <div className="dwin-flash">{flash}</div>}
       {err && <div className="dwin-err">{err}</div>}
+
       <div className="dwin-meta">
         <span className="dwin-meta-item" title="session id">
           {shortId(session.sessionId)}
@@ -200,11 +470,6 @@ export function PaneCard({ session, active, onSelect, onKill, onHandoff }: PaneC
         <span className="dwin-meta-item" title="cli">
           {session.cli}
         </span>
-        {session.persona && (
-          <span className="dwin-meta-item dwin-meta-persona" title="persona">
-            {session.persona}
-          </span>
-        )}
       </div>
     </div>
   );
