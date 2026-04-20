@@ -38,6 +38,7 @@ function ctxTier(pct: number): 'low' | 'normal' | 'warn' | 'high' | 'critical' {
 
 interface HandoffEntry {
   filename: string;
+  filepath: string;
   mtime: string | null;
   size: number;
   head: string;
@@ -494,7 +495,19 @@ export function PaneCard({ session, peerSessions, active, onSelect, onKill }: Pa
           )}
           {history !== null &&
             history.map((h) => (
-              <div className="dwin-history-entry" key={h.filename}>
+              <div
+                className="dwin-history-entry"
+                key={h.filename}
+                role="button"
+                tabIndex={0}
+                title="Click to copy absolute path"
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(h.filepath)
+                    .then(() => setFlash(`path copied: ${h.filename}`))
+                    .catch(() => setFlash('clipboard unavailable'));
+                }}
+              >
                 <div className="dwin-history-filename">{h.filename}</div>
                 <div className="dwin-history-meta">
                   {h.sent ?? h.mtime ?? '?'}

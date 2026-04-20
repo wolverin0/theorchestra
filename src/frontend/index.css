@@ -1624,6 +1624,12 @@ body,
   font-size: 10px;
   font-family: "JetBrains Mono", ui-monospace, monospace;
   background: var(--bg-base);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.dwin-history-entry:hover {
+  border-color: var(--accent);
 }
 
 .dwin-history-entry + .dwin-history-entry {
