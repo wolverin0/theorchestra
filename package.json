@@ -49,7 +49,8 @@
     "v3:phase45-gate": "tsx scripts/v3-phase45-gate.ts",
     "v3:phase6-gate": "tsx scripts/v3-phase6-gate.ts",
     "v3:phase7-gate": "tsx scripts/v3-phase7-gate.ts",
-    "v3:phase89-gate": "tsx scripts/v3-phase89-gate.ts"
+    "v3:phase89-gate": "tsx scripts/v3-phase89-gate.ts",
+    "v3:phase11": "tsx scripts/v3-phase11-run.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
