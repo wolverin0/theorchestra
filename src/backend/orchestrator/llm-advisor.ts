@@ -115,7 +115,10 @@ function buildPrompt(input: AdvisorInput): string {
 function anthropicProvider(): AdvisorProvider | null {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return null;
-  const modelId = process.env.THEORCHESTRA_LLM_MODEL ?? 'claude-haiku-4-5-20251001';
+  // P6.A2 (2026-04-21): default to Opus. The orchestrator runs every event
+  // through the LLM now — cost is user-gated by cooldowns + toggle, not model
+  // selection. Override via THEORCHESTRA_LLM_MODEL for cheaper runs.
+  const modelId = process.env.THEORCHESTRA_LLM_MODEL ?? 'claude-opus-4-7';
   return {
     name: 'anthropic-api',
     modelId,
@@ -146,7 +149,10 @@ function anthropicProvider(): AdvisorProvider | null {
 
 /** Claude CLI subprocess provider. Null if `claude` not on PATH. */
 function claudeCliProvider(): AdvisorProvider | null {
-  const modelId = process.env.THEORCHESTRA_LLM_MODEL ?? 'claude-haiku-4-5-20251001';
+  // P6.A2 (2026-04-21): default to Opus. The orchestrator runs every event
+  // through the LLM now — cost is user-gated by cooldowns + toggle, not model
+  // selection. Override via THEORCHESTRA_LLM_MODEL for cheaper runs.
+  const modelId = process.env.THEORCHESTRA_LLM_MODEL ?? 'claude-opus-4-7';
   return {
     name: 'claude-cli',
     modelId,
@@ -234,8 +240,19 @@ export class LlmAdvisor {
   private readonly now: () => number;
 
   constructor(private readonly opts: LlmAdvisorOptions) {
-    this.perPaneCooldownMs = (opts.perPaneCooldownSec ?? 30) * 1000;
-    this.globalHourlyCap = opts.globalHourlyCap ?? 60;
+    // P6.B1/B2: LLM-primary defaults. The advisor now fires on every event,
+    // so per-pane cooldown drops to 15s (was 30) and the global hourly cap
+    // rises to 240 (was 60). Both configurable via env:
+    //   THEORCHESTRA_LLM_PER_PANE_COOLDOWN_SEC
+    //   THEORCHESTRA_LLM_HOURLY_CAP
+    const envCooldown = Number.parseInt(
+      process.env.THEORCHESTRA_LLM_PER_PANE_COOLDOWN_SEC ?? '',
+      10,
+    );
+    const envCap = Number.parseInt(process.env.THEORCHESTRA_LLM_HOURLY_CAP ?? '', 10);
+    this.perPaneCooldownMs =
+      (opts.perPaneCooldownSec ?? (Number.isFinite(envCooldown) ? envCooldown : 15)) * 1000;
+    this.globalHourlyCap = opts.globalHourlyCap ?? (Number.isFinite(envCap) ? envCap : 240);
     this.now = opts.now ?? Date.now;
     if (opts.providerOverride) {
       this.provider = opts.providerOverride;
@@ -244,6 +261,11 @@ export class LlmAdvisor {
     } else {
       this.provider = null;
     }
+  }
+
+  /** Runtime kill-switch. Dashboard exposes via POST /api/orchestrator/advisor/toggle. */
+  setEnabled(next: boolean): void {
+    this.opts.enabled = next;
   }
 
   get enabled(): boolean {
@@ -258,7 +280,12 @@ export class LlmAdvisor {
     return this.provider?.modelId ?? 'none';
   }
 
-  get stats(): { callsThisHour: number; cooldownsActive: number } {
+  get stats(): {
+    callsThisHour: number;
+    hourlyCap: number;
+    cooldownsActive: number;
+    perPaneCooldownSec: number;
+  } {
     const now = this.now();
     const oneHourAgo = now - 60 * 60 * 1000;
     while (this.globalCalls.length > 0 && this.globalCalls[0]! < oneHourAgo) {
@@ -268,7 +295,12 @@ export class LlmAdvisor {
     for (const ts of this.perPaneLastCall.values()) {
       if (now - ts < this.perPaneCooldownMs) cooldowns++;
     }
-    return { callsThisHour: this.globalCalls.length, cooldownsActive: cooldowns };
+    return {
+      callsThisHour: this.globalCalls.length,
+      hourlyCap: this.globalHourlyCap,
+      cooldownsActive: cooldowns,
+      perPaneCooldownSec: this.perPaneCooldownMs / 1000,
+    };
   }
 
   async advise(input: AdvisorInput): Promise<AdvisorVerdict> {

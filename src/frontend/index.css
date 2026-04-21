@@ -2569,3 +2569,10 @@ body,
 /* PLAN-OF-TRUTH P4.3 — snapshot badge on orchestrator asks. */
 .omni-msg-snap { margin-top: 4px; font-size: 10px; font-family: ui-monospace, monospace; color: #7ba4d9; background: #0f1a2a; border: 1px solid #1d3a5f; padding: 2px 6px; border-radius: 3px; display: inline-block; }
 .omni-msg-snap.err { color: #ff9b5e; background: #2a1a0f; border-color: #6b3a1d; }
+
+/* P6.B4 — toggle pill + warn state. */
+.rp-pill.warn { background: #5e2e1b; color: #ffc9a0; }
+.rp-toggle { margin-left: auto; font-family: ui-monospace, monospace; font-size: 10px; border: 1px solid #2a2f3a; border-radius: 3px; padding: 2px 8px; cursor: pointer; background: #1d3a5f; color: #bcd3f2; }
+.rp-toggle.on { background: #1e4a2c; color: #9ce3a7; border-color: #2a6b3e; }
+.rp-toggle.off { background: #4a1e1e; color: #e39c9c; border-color: #6b2a2a; }
+.rp-toggle:hover { opacity: 0.85; }

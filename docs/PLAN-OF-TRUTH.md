@@ -177,11 +177,49 @@ reasoning panel visible lands in `docs/screenshots/v3.0/plan-of-truth-final.png`
 
 ---
 
+## PHASE 6 — LLM-primary orchestration (Opus)
+
+Added 2026-04-21 after P5 shipped. The P2 advisor was gated to content-class
+events — a static rule I invented for cost safety. User override: there
+cannot be any static gates; the LLM decides, per-event, case-by-case. Opus
+is the primary conductor. Rule engine downgrades to "suggestion source."
+
+### 6.A Invert the gate
+
+- [x] **P6.A1** `baselineVerdict !== 'content'` guard removed in
+      `maybeReviseWithAdvisor`. Advisor fires on EVERY `SseEvent` when enabled.
+- [x] **P6.A2** Default model → `claude-opus-4-7`. Live-verified:
+      `provider=claude-cli, model=claude-opus-4-7`.
+- [x] **P6.A3** Advisor verdict is primary; rule-engine action is fallback
+      when advisor errors/times out/cools down.
+- [x] **P6.A4** Classifier rails still veto — proven by unit test
+      "destructive-keyword rail vetoes advisor-endorsed continue".
+
+### 6.B Cost controls
+
+- [x] **P6.B1** Per-pane cooldown default = 15 s.
+- [x] **P6.B2** Global hourly cap default = 240; env override
+      `THEORCHESTRA_LLM_HOURLY_CAP` + `THEORCHESTRA_LLM_PER_PANE_COOLDOWN_SEC`.
+- [x] **P6.B3** `POST /api/orchestrator/advisor/toggle {enabled}` live.
+- [x] **P6.B4** ReasoningPanel shows `X/Y` (cap), `N cool`, ON/OFF toggle button.
+
+### 6.C Tests
+
+- [x] **P6.C1** `scripts/v3-llm-primary-unit.ts` — 6/6 PASS.
+- [x] **P6.C2** `scripts/v3-llm-primary-gate.ts` — 3/3 PASS with Opus live.
+
+### 6.D Aggregate + release
+
+- [x] **P6.D1** P6 gates added to aggregator.
+- [x] **P6.D2** `npm run v3:gate` = 8/8 green.
+- [x] **P6.D3** Commit `98033dc feat(v3): LLM-primary orchestration with Opus`.
+- [x] **P6.D4** Tagged `v3.0.0-rc.2`.
+
 ## Execution order
 
-P0 → P1 → P2 → P3 → P4 → P5. No skipping. If a phase fails verify, fix THAT
-phase before advancing. If a new requirement surfaces mid-execution, write it
-into this file first, then implement.
+P0 → P1 → P2 → P3 → P4 → P5 → P6. No skipping. If a phase fails verify,
+fix THAT phase before advancing. If a new requirement surfaces mid-execution,
+write it into this file first, then implement.
 
 ## Drift guard
 

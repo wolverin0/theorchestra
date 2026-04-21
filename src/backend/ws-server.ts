@@ -628,7 +628,9 @@ function makeHttpHandler(
           provider: 'none',
           modelId: 'none',
           callsThisHour: 0,
+          hourlyCap: 0,
           cooldownsActive: 0,
+          perPaneCooldownSec: 0,
         });
         return;
       }
@@ -638,8 +640,34 @@ function makeHttpHandler(
         provider: advisor.providerName,
         modelId: advisor.modelId,
         callsThisHour: stats.callsThisHour,
+        hourlyCap: stats.hourlyCap,
         cooldownsActive: stats.cooldownsActive,
+        perPaneCooldownSec: stats.perPaneCooldownSec,
       });
+      return;
+    }
+
+    // P6.B3 — runtime toggle. No provider rotation, just on/off.
+    if (method === 'POST' && pathname === '/api/orchestrator/advisor/toggle') {
+      const advisor = getAdvisor();
+      if (!advisor) {
+        writeJson(res, 503, { error: 'advisor_not_ready' });
+        return;
+      }
+      try {
+        const body = (await readJsonBody(req)) as { enabled?: unknown };
+        if (typeof body.enabled !== 'boolean') {
+          writeJson(res, 400, { error: 'invalid_body', detail: 'enabled (boolean) required' });
+          return;
+        }
+        advisor.setEnabled(body.enabled);
+        writeJson(res, 200, { enabled: advisor.enabled });
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'toggle_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 

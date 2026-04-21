@@ -15,7 +15,9 @@ interface AdvisorStatus {
   provider: string;
   modelId: string;
   callsThisHour: number;
+  hourlyCap: number;
   cooldownsActive: number;
+  perPaneCooldownSec: number;
 }
 
 interface Attestation {
@@ -73,31 +75,55 @@ export function ReasoningPanel() {
     };
   }, []);
 
+  async function toggle(next: boolean): Promise<void> {
+    try {
+      await authedFetch('/api/orchestrator/advisor/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      setStatus((prev) => (prev ? { ...prev, enabled: next } : prev));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   if (error) {
     return <div className="rp-error">reasoning panel: {error}</div>;
   }
   if (!status) return <div className="rp-loading">loading advisor status…</div>;
-  if (!status.enabled) {
+  if (!status.enabled && status.provider === 'none') {
     return (
       <div className="rp-disabled">
         <p>
           LLM advisor is off. Set <code>THEORCHESTRA_LLM_ADVISOR=1</code> and
           provide <code>ANTHROPIC_API_KEY</code> or put <code>claude</code> on
-          PATH to enable autonomous subjective reasoning.
+          PATH to enable autonomous orchestration.
         </p>
       </div>
     );
   }
 
   const attested = decisions.filter((d) => d.action.attestation?.by === 'llm-advisor');
+  const capPct = status.hourlyCap > 0 ? Math.round((status.callsThisHour / status.hourlyCap) * 100) : 0;
 
   return (
     <div className="rp-body">
       <div className="rp-status">
         <span className="rp-pill">{status.provider}</span>
         <span className="rp-pill">{status.modelId}</span>
-        <span className="rp-pill">{status.callsThisHour}/hr</span>
+        <span className={`rp-pill ${capPct > 80 ? 'warn' : ''}`}>
+          {status.callsThisHour}/{status.hourlyCap}
+        </span>
         <span className="rp-pill">{status.cooldownsActive} cool</span>
+        <button
+          type="button"
+          className={`rp-toggle ${status.enabled ? 'on' : 'off'}`}
+          onClick={() => void toggle(!status.enabled)}
+          aria-label={status.enabled ? 'Disable advisor' : 'Enable advisor'}
+        >
+          {status.enabled ? 'ON' : 'OFF'}
+        </button>
       </div>
       {attested.length === 0 ? (
         <div className="rp-empty">No advisor-attested decisions yet.</div>

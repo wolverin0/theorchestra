@@ -29,6 +29,8 @@ const STEPS: Step[] = [
   { label: 'P3.A1 dashboard-action unit', script: 'scripts/v3-dashboard-action-unit.ts' },
   { label: 'P3.A2 dashboard-action e2e', script: 'scripts/v3-dashboard-action-gate.ts' },
   { label: 'P4.A reasoning panel', script: 'scripts/v3-reasoning-panel-gate.ts' },
+  { label: 'P6.C1 llm-primary unit', script: 'scripts/v3-llm-primary-unit.ts' },
+  { label: 'P6.C2 llm-primary e2e', script: 'scripts/v3-llm-primary-gate.ts' },
 ];
 
 async function runOne(step: Step): Promise<{ ok: boolean; output: string }> {

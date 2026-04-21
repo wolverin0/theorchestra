@@ -206,12 +206,16 @@ export function startOrchestrator(
   async function maybeReviseWithAdvisor(
     event: SseEvent,
     proposed: Action,
-    baselineVerdict: Classification['verdict'],
+    _baselineVerdict: Classification['verdict'],
   ): Promise<Action> {
-    // Only invoke on content-class baseline decisions. Mechanics go through
-    // as-is (advisor would add latency + cost with nothing to gain).
+    // P6.A1 (2026-04-21): removed the content-only gate. The advisor now
+    // fires on EVERY event when enabled. Static rules (like "only on
+    // content") are out — the LLM decides, case by case, what warrants
+    // a response. Cost is gated by per-pane cooldown + hourly cap + user
+    // toggle, NOT by static event-type filters. If the advisor errors or
+    // is rate-limited, we still fall back to the rule-proposed action
+    // unchanged — advisor is strictly additive, never subtractive.
     if (!opts.advisor || !opts.advisor.enabled) return proposed;
-    if (baselineVerdict !== 'content') return proposed;
 
     const sid =
       'sessionId' in proposed && proposed.sessionId ? proposed.sessionId : null;
