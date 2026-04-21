@@ -56,6 +56,14 @@ export interface ExecutorOptions {
    * propose a `dashboard_action`, escalate, or no-op. See llm-advisor.ts.
    */
   advisor?: LlmAdvisor;
+  /**
+   * Fix #3 — if omniclaude is the active primary reasoner, the rule engine
+   * short-circuits on every event whose sessionId is NOT the omniclaude sid.
+   * Omniclaude owns those decisions. The rule engine remains as a fallback
+   * path when this provider returns null (omniclaude down) or when the event
+   * targets the omniclaude pane itself (rules still guard self-events).
+   */
+  omniSidProvider?: () => SessionId | null;
 }
 
 export interface OrchestratorHandles {
@@ -267,6 +275,20 @@ export function startOrchestrator(
 
   async function handle(event: SseEvent): Promise<DecisionRecord[]> {
     const now = (opts.now ?? Date.now)();
+    // Fix #3 (corrected) — if omniclaude is alive AT ALL, it's the primary
+    // reasoner for every event (including events for its own pane, which it
+    // handles internally). The rule engine stays silent as a fallback. Only
+    // when omniclaude's pane is exited or absent does the rule engine take
+    // over. "Alive" means: pane record exists AND status isn't 'exited'.
+    const omniSid = opts.omniSidProvider?.() ?? null;
+    if (omniSid) {
+      const omniDetail = manager.statusDetail(omniSid);
+      const omniAlive = omniDetail !== undefined && omniDetail.status !== 'exited';
+      if (omniAlive) {
+        // Skip the rule-engine path entirely for this event.
+        return [];
+      }
+    }
     const actions = proposeActions(event, manager, opts.rules);
     const records: DecisionRecord[] = [];
     for (const proposed of actions) {

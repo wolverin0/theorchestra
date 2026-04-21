@@ -111,6 +111,41 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
   const cwd = opts.cwd ?? defaultCwd();
   fs.mkdirSync(cwd, { recursive: true });
 
+  // Fix #1 — write a per-cwd .mcp.json templated with the LIVE port + token
+  // so omniclaude's MCP tools reach THIS backend, not whatever the repo-root
+  // .mcp.json was frozen with. Claude Code walks up from cwd to find the
+  // nearest .mcp.json; putting one directly in omniclaude's cwd wins.
+  try {
+    const port = process.env.THEORCHESTRA_PORT ?? '4300';
+    const tokenFile = process.env.THEORCHESTRA_TOKEN_FILE ?? '';
+    const repoRoot = path.resolve(__dirname, '..', '..');
+    const mcpBin = path.join(repoRoot, 'bin', 'theorchestra-mcp.js');
+    const mcpJson = {
+      mcpServers: {
+        theorchestra: {
+          type: 'stdio',
+          command: 'node',
+          args: [mcpBin.replace(/\\/g, '/')],
+          env: {
+            THEORCHESTRA_PORT: port,
+            ...(tokenFile ? { THEORCHESTRA_TOKEN_FILE: tokenFile.replace(/\\/g, '/') } : {}),
+            // Pass-through NO_AUTH so test harnesses work too.
+            ...(process.env.THEORCHESTRA_NO_AUTH === '1' ? { THEORCHESTRA_NO_AUTH: '1' } : {}),
+          },
+        },
+      },
+    };
+    fs.writeFileSync(
+      path.join(cwd, '.mcp.json'),
+      JSON.stringify(mcpJson, null, 2) + '\n',
+      'utf-8',
+    );
+    console.log(`[omniclaude] wrote .mcp.json at ${cwd} → backend on :${port}`);
+  } catch (err) {
+    const m = err instanceof Error ? err.message : String(err);
+    console.error(`[omniclaude] failed to write .mcp.json: ${m}`);
+  }
+
   // Spawn omniclaude. We'd like to pass --continue so cross-restart
   // conversation history resumes, BUT `claude --continue` with no prior
   // session exits immediately with code 1 ("No conversation found to
@@ -173,10 +208,30 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
     }
   }, 4000);
 
+  // Fix #2 — pane_idle coalesce. Claude panes emit many idle transitions in
+  // quick succession as the status line repaints; without this, omniclaude's
+  // queue floods. We keep a per-(type, sid) lastEnqueue map and skip enqueues
+  // that happened within the coalesce window. Non-pane_idle events bypass
+  // the filter because they're usually meaningful (permission, ctx_threshold,
+  // pane_stuck, a2a_received, peer_orphaned).
+  const COALESCE_MS = 3000;
+  const lastEnqueueForKey = new Map<string, number>();
+
   // Subscribe to every event type. Self-events (from omniclaude's own pane)
   // are skipped so omniclaude isn't chasing its own shadow.
   const unsubscribe = opts.bus.subscribe((evt: SseEvent) => {
     if ('sessionId' in evt && evt.sessionId === sid) return;
+
+    if (evt.type === 'pane_idle') {
+      const key = `pane_idle|${evt.sessionId}`;
+      const now = Date.now();
+      const last = lastEnqueueForKey.get(key);
+      if (last !== undefined && now - last < COALESCE_MS) {
+        return; // coalesce: drop this enqueue
+      }
+      lastEnqueueForKey.set(key, now);
+    }
+
     const body = formatEventBody(evt);
     const prompt = `[EVENT type=${evt.type} id=${evt.id} ts=${evt.ts}]\n${body}\nRespond with MCP tool calls + a DECISION line.`;
     try {

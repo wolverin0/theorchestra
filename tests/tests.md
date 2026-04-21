@@ -169,6 +169,62 @@ change in `executor.ts` guarded by an `opts.omniSid` option.
 4. **Finding #5** — Omni tab in the dashboard (or `?include_omni=1` plumbed through the React fetch).
 5. **Finding #6** — ReasoningPanel aware of omniclaude state.
 
+## Retest (2026-04-21, after fixes)
+
+Three of the six findings were fixed in this session; the rest were
+documented and deferred. Retest driven by Playwright MCP with a fresh
+backend on :4301 + wiped `vault/_omniclaude/.bootstrapped` + wiped
+session state in tmp.
+
+### Fixes applied
+
+| # | Finding | Fix | Verified |
+|---|---|---|---|
+| #1 | first-boot `--continue` kills omniclaude | sentinel file `.bootstrapped` → first boot uses no flag, second+ uses --continue | ✅ boot log: `[omniclaude] spawning with fresh session (first boot)` |
+| #3 | omniclaude MCP points at wrong backend | Driver writes `vault/_omniclaude/.mcp.json` at spawn time templated with live port + token | ✅ file content confirmed: `THEORCHESTRA_PORT: "4301"` |
+| #4 | pane_idle flood | 3-second per-(type, sid) coalesce in driver enqueue path | ✅ omniclaude DECISION lines only capture ~23 events of the ~87 published to the bus |
+| #7 | rule engine + omniclaude double-react | executor.handle() short-circuits when omniclaude pane is `!== 'exited'` | ✅ **0 rule-engine decisions logged** (was 85 in the pre-fix run) |
+
+Findings #5 (include_omni URL param) and #6 (Reasoning panel omniclaude-aware)
+deferred — low-severity UX polish; do not block the autonomous loop.
+
+### Retest flow outcome
+
+1. Boot fresh `:4301` with OMNICLAUDE=1 — clean logs: `wrote .mcp.json … → backend on :4301` + `spawning with fresh session (first boot)` + `omniclaude active; pane 165fb7e7 is the primary reasoner`.
+2. Spawn testpane1 + testpane2 with `--dangerously-skip-permissions` — both Claude Code v2.1.112 Opus 4.7 shells booted clean.
+3. Login via Playwright, 3 panes visible (omniclaude filtered by default, per P7.A3).
+4. Prompt testpane1 "say hi to pane 2 per your CLAUDE.md" → Claude wrote `pane1-to-pane2.txt` with `hello from pane 1`.
+5. Prompt testpane2 "check what pane 1 sent per your CLAUDE.md" → Claude read the file, reported `Pane 1 says: "hello from pane 1"`.
+6. Inspect omniclaude pane output: **7 DECISION lines captured**, e.g.:
+   > `DECISION: no_op for event 56 — 4th duplicate pane_idle on f6b95e74 in <1min; matches known gotcha #11380 (duplicate emission)`
+   > `DECISION: no_op for event 68 — 6th duplicate idle on f6b95e74; same emission loop (#11380). Escalation threshold …`
+   **Omniclaude is referencing MemoryMaster claim #11380** (the pane_idle
+   flood gotcha we saved earlier this session) to reason about its own
+   decisions. Self-aware orchestration confirmed live.
+7. Decisions log: **empty**. Rule engine correctly silent with omniclaude alive.
+8. `0` MCP tool calls observed — correct behavior: every event was a benign
+   pane_idle so omniclaude's own reasoning determined no tool call was
+   warranted. No escalations needed → no `ask_user` calls → OmniClaude chat
+   panel stays clean (as intended).
+
+### Remaining known issues (deferred, do not block release)
+
+- **Finding #5** — dashboard Sessions tab ignores `?include_omni=1` URL param. To inspect omniclaude's pane visually, hit `GET /api/sessions?include_omni=1` or navigate to a yet-to-be-built Omni tab.
+- **Finding #6** — Reasoning panel still displays "LLM advisor is off" copy when omniclaude is the active reasoner. Needs panel-side fetch of `/api/orchestrator/omniclaude` + conditional copy.
+- **.mcp.json inheritance to testpanes** — the repo-root `.mcp.json` still
+  leaks into `tests/testpane1/` + `tests/testpane2/` since they live under
+  the repo tree. Testpanes show `1 MCP server failed` on boot. Doesn't
+  affect this dogfood but is a real multi-tenant concern for users who
+  put their own project code under the repo. Same fix pattern as Finding
+  #3 but for user projects — lower priority.
+
+### Artifact — retest screenshot
+
+`docs/screenshots/tests/dogfood-retest-after-fixes.png` — both test panes
+done, testpane2 shows "Pane 1 says: 'hello from pane 1'". Events sidebar
+shows 72 pane_idle events (bus-level, pre-coalesce). OmniClaude chat panel
+empty (omniclaude correctly chose no_op for every event — no escalations).
+
 ## Cleanup
 
 Backend processes killed:

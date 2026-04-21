@@ -252,12 +252,20 @@ async function main(): Promise<void> {
     process.env.THEORCHESTRA_DECISIONS_DIR ?? path.resolve('vault', '_orchestrator');
   const configPath =
     process.env.THEORCHESTRA_CONFIG_FILE ?? path.resolve('vault', '_orchestrator-config.md');
+
+  // Fix #3 — omniSidProvider for rule-engine short-circuit. Reads the env
+  // var at call time so it picks up the sid AFTER the omniclaude driver
+  // spawns (which happens below).
+  const omniSidProvider = (): string | null =>
+    process.env.THEORCHESTRA_OMNICLAUDE_SID ?? null;
+
   const orchestrator = startOrchestrator(manager, bus, {
     decisionsDir,
     configPath,
     telegram,
     dashboard,
     advisor,
+    omniSidProvider,
   });
   setChat(orchestrator.chat);
   setDecisionLog(orchestrator.log);
