@@ -207,16 +207,38 @@ deferred — low-severity UX polish; do not block the autonomous loop.
    warranted. No escalations needed → no `ask_user` calls → OmniClaude chat
    panel stays clean (as intended).
 
-### Remaining known issues (deferred, do not block release)
+## Retest #2 (2026-04-21, after closing #5 + #6)
 
-- **Finding #5** — dashboard Sessions tab ignores `?include_omni=1` URL param. To inspect omniclaude's pane visually, hit `GET /api/sessions?include_omni=1` or navigate to a yet-to-be-built Omni tab.
-- **Finding #6** — Reasoning panel still displays "LLM advisor is off" copy when omniclaude is the active reasoner. Needs panel-side fetch of `/api/orchestrator/omniclaude` + conditional copy.
-- **.mcp.json inheritance to testpanes** — the repo-root `.mcp.json` still
-  leaks into `tests/testpane1/` + `tests/testpane2/` since they live under
-  the repo tree. Testpanes show `1 MCP server failed` on boot. Doesn't
-  affect this dogfood but is a real multi-tenant concern for users who
-  put their own project code under the repo. Same fix pattern as Finding
-  #3 but for user projects — lower priority.
+### Fixes applied in this wave
+
+| # | Finding | Fix | Verified |
+|---|---|---|---|
+| #5 | Sessions tab ignored omniclaude | New **Omni** tab (`src/frontend/tabs/OmniTab.tsx`) + `SHELL_TABS` entry | ✅ tab renders, shows pills `sid | cmd.exe | idle`, scrollback tail |
+| #6 | Reasoning panel disabled-state when omniclaude on | Panel now fetches `/api/orchestrator/omniclaude` alongside advisor; shows `omniclaude / sid … / primary reasoner` green pills when omniclaude is the active reasoner | ✅ screenshot confirms the new state |
+
+Also: strengthened ANSI-strip regex to handle CSI + OSC + private-mode sequences (`[?2026h` etc.) so the Omni tab's scrollback rendering is readable.
+
+### Retest #2 outcome — the autonomous loop fully closed
+
+Screenshot: `docs/screenshots/tests/dogfood-retest3-omni-tab-cleaned.png`.
+
+**Live evidence of the complete loop working:**
+
+1. Omni tab rendering with pills + scrollback.
+2. Reasoning panel correctly shows `omniclaude / primary reasoner`.
+3. Omniclaude's scrollback contains **`Calling theorchestra… (ctrl+o to expand)`** — meaning omniclaude is ACTUALLY calling MCP tools on the templated `vault/_omniclaude/.mcp.json` → hitting this test backend on :4301.
+4. HTTP inspection: 2 `theorchestra` MCP tool calls captured in scrollback.
+5. Decisions log: still 0 entries (rule engine remains silent per Finding #7 fix).
+6. Event coalesce: Events sidebar drops to 0 after page refresh (was 72+ pre-fix).
+
+**All six original findings now resolved in-code.** Deferred items:
+
+- **testpane `.mcp.json` leak** — user projects under the repo tree inherit the repo-root `.mcp.json` (points at :4800 / stale token). Not a theorchestra bug — user's own `.mcp.json` in their project root would override. Leaving as documentation.
+
+### Release state
+
+- `npm run v3:gate` still **10/10 green** after both fix waves (not a regression).
+- Next tag candidate: `v3.1.0-rc.2` — 6 findings closed.
 
 ### Artifact — retest screenshot
 

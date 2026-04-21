@@ -2576,3 +2576,28 @@ body,
 .rp-toggle.on { background: #1e4a2c; color: #9ce3a7; border-color: #2a6b3e; }
 .rp-toggle.off { background: #4a1e1e; color: #e39c9c; border-color: #6b2a2a; }
 .rp-toggle:hover { opacity: 0.85; }
+
+/* Finding #5 — Omni tab */
+.omni-tab { padding: 16px; color: #d0d4da; display: flex; flex-direction: column; gap: 16px; }
+.omni-tab-loading, .omni-tab-error, .omni-tab-disabled { padding: 24px; color: #9a9a9a; }
+.omni-tab-disabled h2 { color: #d0d4da; margin: 0 0 8px; }
+.omni-tab-disabled code { background: #222; padding: 1px 4px; border-radius: 3px; font-size: 12px; }
+.omni-tab-error { color: #ff7b7b; }
+.omni-header { display: flex; align-items: center; gap: 12px; }
+.omni-header h2 { margin: 0; }
+.omni-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.omni-pill { background: #1d3a5f; color: #bcd3f2; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-family: ui-monospace, monospace; }
+.omni-pill.status-idle { background: #1e4a2c; color: #9ce3a7; }
+.omni-pill.status-working { background: #5e4e1b; color: #f2e0a0; }
+.omni-pill.status-exited { background: #4a1e1e; color: #e39c9c; }
+.omni-pill.warn { background: #5e2e1b; color: #ffc9a0; }
+.omni-decisions { background: #161a22; border: 1px solid #2a2f3a; border-radius: 6px; padding: 12px; }
+.omni-decisions h3 { margin: 0 0 8px; font-size: 13px; color: #bcd3f2; }
+.omni-decisions ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5; color: #b8bdc7; }
+.omni-decisions li { background: #0f1a2a; border: 1px solid #1d3a5f; border-radius: 3px; padding: 4px 8px; }
+.omni-scrollback h3 { margin: 0 0 8px; font-size: 13px; color: #bcd3f2; }
+.omni-pre { background: #0f1117; border: 1px solid #2a2f3a; border-radius: 6px; padding: 12px; color: #c0c4ca; font-family: ui-monospace, monospace; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 50vh; overflow-y: auto; margin: 0; }
+
+/* Finding #6 — reasoning-panel omni pill */
+.rp-pill.omni { background: #1e4a2c; color: #9ce3a7; }
+.rp-pill.ok { background: #1e4a2c; color: #9ce3a7; }

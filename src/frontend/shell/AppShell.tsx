@@ -14,13 +14,14 @@ import type { SessionRecord } from '@shared/types';
  * U2-U6 fill out each tab's body.
  */
 
-export type ShellTab = 'sessions' | 'live' | 'desktop' | 'spawn';
+export type ShellTab = 'sessions' | 'live' | 'desktop' | 'spawn' | 'omni';
 
 export const SHELL_TABS: ReadonlyArray<{ id: ShellTab; label: string }> = [
   { id: 'sessions', label: 'Sessions' },
   { id: 'live', label: 'Live' },
   { id: 'desktop', label: 'Desktop' },
   { id: 'spawn', label: 'Spawn' },
+  { id: 'omni', label: 'Omni' },
 ];
 
 interface StatusCounts {

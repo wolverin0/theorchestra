@@ -6,6 +6,7 @@ import { SessionsTab } from './tabs/SessionsTab';
 import { LiveTab } from './tabs/LiveTab';
 import { DesktopTab } from './tabs/DesktopTab';
 import { SpawnTab } from './tabs/SpawnTab';
+import { OmniTab } from './tabs/OmniTab';
 
 /**
  * Top-level app. Two responsibilities only:
@@ -90,6 +91,7 @@ export function App() {
       {activeTab === 'live' && <LiveTab />}
       {activeTab === 'desktop' && <DesktopTab />}
       {activeTab === 'spawn' && <SpawnTab />}
+      {activeTab === 'omni' && <OmniTab />}
     </AppShell>
   );
 }

@@ -20,6 +20,11 @@ interface AdvisorStatus {
   perPaneCooldownSec: number;
 }
 
+interface OmniStatus {
+  enabled: boolean;
+  session: { sessionId: string; cli: string } | null;
+}
+
 interface Attestation {
   by: string;
   reasoning: string;
@@ -45,6 +50,7 @@ interface Decision {
 
 export function ReasoningPanel() {
   const [status, setStatus] = useState<AdvisorStatus | null>(null);
+  const [omni, setOmni] = useState<OmniStatus | null>(null);
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -52,9 +58,10 @@ export function ReasoningPanel() {
     let alive = true;
     async function pull(): Promise<void> {
       try {
-        const [sRes, dRes] = await Promise.all([
+        const [sRes, dRes, oRes] = await Promise.all([
           authedFetch('/api/orchestrator/advisor'),
           authedFetch('/api/orchestrator/decisions?limit=40'),
+          authedFetch('/api/orchestrator/omniclaude'),
         ]);
         if (!alive) return;
         if (sRes.ok) setStatus((await sRes.json()) as AdvisorStatus);
@@ -62,6 +69,7 @@ export function ReasoningPanel() {
           const body = (await dRes.json()) as { decisions: Decision[] };
           setDecisions(body.decisions);
         }
+        if (oRes.ok) setOmni((await oRes.json()) as OmniStatus);
         setError(null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -92,13 +100,20 @@ export function ReasoningPanel() {
     return <div className="rp-error">reasoning panel: {error}</div>;
   }
   if (!status) return <div className="rp-loading">loading advisor status…</div>;
-  if (!status.enabled && status.provider === 'none') {
+
+  // Finding #6 fix — honor omniclaude as the primary reasoner when it's on.
+  const omniActive = Boolean(omni?.enabled && omni.session);
+  const advisorActive = status.enabled && status.provider !== 'none';
+
+  if (!omniActive && !advisorActive) {
     return (
       <div className="rp-disabled">
         <p>
-          LLM advisor is off. Set <code>THEORCHESTRA_LLM_ADVISOR=1</code> and
-          provide <code>ANTHROPIC_API_KEY</code> or put <code>claude</code> on
-          PATH to enable autonomous orchestration.
+          No LLM orchestrator active. Set{' '}
+          <code>THEORCHESTRA_OMNICLAUDE=1</code> for the persistent omniclaude
+          pane (recommended), OR <code>THEORCHESTRA_LLM_ADVISOR=1</code> +{' '}
+          <code>ANTHROPIC_API_KEY</code> / <code>claude</code> on PATH for the
+          one-shot advisor fallback.
         </p>
       </div>
     );
@@ -109,22 +124,32 @@ export function ReasoningPanel() {
 
   return (
     <div className="rp-body">
-      <div className="rp-status">
-        <span className="rp-pill">{status.provider}</span>
-        <span className="rp-pill">{status.modelId}</span>
-        <span className={`rp-pill ${capPct > 80 ? 'warn' : ''}`}>
-          {status.callsThisHour}/{status.hourlyCap}
-        </span>
-        <span className="rp-pill">{status.cooldownsActive} cool</span>
-        <button
-          type="button"
-          className={`rp-toggle ${status.enabled ? 'on' : 'off'}`}
-          onClick={() => void toggle(!status.enabled)}
-          aria-label={status.enabled ? 'Disable advisor' : 'Enable advisor'}
-        >
-          {status.enabled ? 'ON' : 'OFF'}
-        </button>
-      </div>
+      {omniActive && omni?.session && (
+        <div className="rp-status">
+          <span className="rp-pill omni">omniclaude</span>
+          <span className="rp-pill">sid {omni.session.sessionId.slice(0, 8)}</span>
+          <span className="rp-pill">{omni.session.cli}</span>
+          <span className="rp-pill ok">primary reasoner</span>
+        </div>
+      )}
+      {advisorActive && (
+        <div className="rp-status">
+          <span className="rp-pill">{status.provider}</span>
+          <span className="rp-pill">{status.modelId}</span>
+          <span className={`rp-pill ${capPct > 80 ? 'warn' : ''}`}>
+            {status.callsThisHour}/{status.hourlyCap}
+          </span>
+          <span className="rp-pill">{status.cooldownsActive} cool</span>
+          <button
+            type="button"
+            className={`rp-toggle ${status.enabled ? 'on' : 'off'}`}
+            onClick={() => void toggle(!status.enabled)}
+            aria-label={status.enabled ? 'Disable advisor' : 'Enable advisor'}
+          >
+            {status.enabled ? 'ON' : 'OFF'}
+          </button>
+        </div>
+      )}
       {attested.length === 0 ? (
         <div className="rp-empty">No advisor-attested decisions yet.</div>
       ) : (
