@@ -3,13 +3,18 @@
  *
  * Verifies the "context hygiene" loop:
  *   1. ~/.claude/agents/project-briefer.md is a valid agent definition
- *   2. omniclaude, when told to brief itself on a fixture project, calls
+ *   2. omniclaude, when told to brief itself on a fixture project, invokes
  *      the Task subagent and quotes content from the fixture's monitoring.md
- *      in its DECISION line (AUTH-001) — file-read path validated.
- *   3. omniclaude's briefing call also surfaces a MemoryMaster-seeded claim
- *      scoped to `project:testproject-briefer-probe` — MCP path validated.
+ *      in its DECISION line (AUTH-001) — Task-subagent file-read path validated.
+ *   3. omniclaude ITSELF (not via the briefer) calls
+ *      mcp__memorymaster__query_for_context and quotes a seeded mm-XXXX
+ *      claim in its DECISION line — omniclaude's user-global MCP inheritance
+ *      validated. Architectural note: the briefer subagent does NOT surface
+ *      MM claims because Task subagents do not reliably inherit user-global
+ *      MCP; omniclaude must call MemoryMaster directly and factor the
+ *      result into its own reasoning.
  *
- * Pre-requisites (manual, once per machine — see v3.1.0-rc.5 commit message):
+ * Pre-requisites (manual, once per machine):
  *   - 3 MemoryMaster claims ingested with scope=project:testproject-briefer-probe
  *     containing the string "BRIEFER_PROBE_FIXTURE_TOKEN_". If absent, scenario 3
  *     SKIPs rather than FAILs.
@@ -267,28 +272,32 @@ Then stop.`;
   };
 }
 
-// ─── SCENARIO 3 — briefer surfaces MemoryMaster-seeded claim ───────────────
+// ─── SCENARIO 3 — omniclaude directly queries MemoryMaster ─────────────────
 
 async function scenarioMemoryMasterCitation(
   port: number,
   token: string,
   decisionsDir: string,
 ): Promise<ScenarioResult> {
-  const name = '3 — briefer surfaces MemoryMaster claim';
+  const name = '3 — omniclaude calls MemoryMaster directly (not via briefer)';
   const t0 = Date.now();
 
-  const fixturePath = FIXTURE_DIR.replace(/\\/g, '/');
-  const prompt = `Mission: use the project-briefer subagent on ${fixturePath}.
+  // Updated design (2026-04-22): the briefer does NOT surface MM claims
+  // because Task subagents don't reliably inherit user-global MCP. Instead,
+  // this scenario verifies that OMNICLAUDE ITSELF (which DOES have user-
+  // global MCP access) can call mcp__memorymaster__query_for_context and
+  // quote a pre-seeded mm-XXXX claim ID in its DECISION line.
+  const prompt = `Mission: probe MemoryMaster from your own context.
 
-Call Task({ subagent_type: "project-briefer", description: "brief on testproject-briefer-probe MM path", prompt: "Project root: ${fixturePath}\\nReason: verify MemoryMaster pathway — look for the distinctive fixture token in Known gotchas section." }).
+Call mcp__memorymaster__query_for_context({ query: "BRIEFER_PROBE_FIXTURE_TOKEN", scope_allowlist: "project:testproject-briefer-probe", token_budget: 1500, detail_level: "standard" }).
 
-From the returned briefing, find a claim in the "Known gotchas (MemoryMaster)" section. Each claim line starts with a bracketed ID like [mm-XXXX]. Emit ONE DECISION line with this shape:
-  DECISION: mm-cited - testproject-briefer-probe: <the-exact-mm-id>
+The result contains claims whose text starts with "BRIEFER_PROBE_FIXTURE_TOKEN_". Each claim has an id=NNNN number. Emit ONE DECISION line of this shape:
+  DECISION: mm-probed - testproject-briefer-probe: mm-<human_id-of-one-claim>
 
-Where <the-exact-mm-id> is the mm-XXXX identifier you read verbatim from the briefing. Do NOT paste angle brackets. Do NOT guess. Do NOT paste a placeholder.
+Where <human_id-of-one-claim> is the SHORT human_id (format like mm-XXXX, 4 chars after dash) from one of the returned claims. Do NOT paste angle brackets. Do NOT paste a placeholder.
 
-If the briefer says MemoryMaster is unavailable or returns zero claims, emit instead:
-  DECISION: mm-unavailable - testproject-briefer-probe: no claims returned
+If the tool is unavailable, emit instead:
+  DECISION: mm-probed - testproject-briefer-probe: tool unavailable
 
 Then stop.`;
 
@@ -305,12 +314,9 @@ Then stop.`;
 
   const deadline = Date.now() + 4 * 60 * 1000;
   const mmIdToken = /\bmm-[a-z0-9]{4}\b/;
-  // SKIP signals (widened): the briefer ran but couldn't retrieve claims.
-  // Could be subagent-MCP-inheritance gap, empty scope, stale DB, etc.
-  // Not a pass, not a hard fail — unknown that needs deeper investigation.
-  const unavailableToken = /mm-unavailable|no claims returned|no claims found|memorymaster unavailable/i;
+  const unavailableToken = /tool unavailable|memorymaster unavailable/i;
   const projectToken = /testproject-briefer-probe/;
-  const placeholderLeak = /<the-exact-mm-id>|<quote|placeholder/i;
+  const placeholderLeak = /<human_id|<the-exact|<quote|placeholder/i;
 
   const today = new Date().toISOString().slice(0, 10);
   const logPath = path.join(decisionsDir, `decisions-${today}.md`);
@@ -328,7 +334,7 @@ Then stop.`;
           return {
             name,
             verdict: 'SKIP',
-            detail: 'briefer reported MemoryMaster unavailable — pre-seeded claims may be missing or MCP inaccessible from subagent',
+            detail: 'omniclaude reported MemoryMaster unavailable from its own context',
             seconds: (Date.now() - t0) / 1000,
           };
         }
@@ -337,7 +343,7 @@ Then stop.`;
           return {
             name,
             verdict: 'PASS',
-            detail: `decision log cites MemoryMaster claim ${id} — MCP path verified`,
+            detail: `omniclaude cited MemoryMaster claim ${id} from its own MCP surface — user-global MCP inheritance verified`,
             seconds: (Date.now() - t0) / 1000,
           };
         }

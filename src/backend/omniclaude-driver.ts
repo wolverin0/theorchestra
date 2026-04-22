@@ -19,6 +19,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 import type { PtyManager, PtyDataEvent } from './pty-manager.js';
@@ -134,21 +135,46 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
     const tokenFileAbs = path.resolve(
       process.env.THEORCHESTRA_TOKEN_FILE ?? path.join(repoRoot, 'vault', '_auth', 'token.json'),
     );
-    const mcpJson = {
-      mcpServers: {
-        theorchestra: {
-          type: 'stdio',
-          command: 'node',
-          args: [mcpBin.replace(/\\/g, '/')],
-          env: {
-            THEORCHESTRA_PORT: port,
-            THEORCHESTRA_TOKEN_FILE: tokenFileAbs.replace(/\\/g, '/'),
-            // Pass-through NO_AUTH so test harnesses work too.
-            ...(process.env.THEORCHESTRA_NO_AUTH === '1' ? { THEORCHESTRA_NO_AUTH: '1' } : {}),
-          },
+    // Start with theorchestra (always) then merge in any MCP servers the
+    // user has globally configured at ~/.claude/.mcp.json — otherwise the
+    // scoped file SHADOWS the global config and omniclaude loses access
+    // to memorymaster/serena/etc. (verified 2026-04-22 via sc3 of the
+    // briefer-behavior-gate reporting "mm-probed — tool unavailable").
+    // Claude Code does not merge across levels; scoped wins outright.
+    const mcpServers: Record<string, unknown> = {
+      theorchestra: {
+        type: 'stdio',
+        command: 'node',
+        args: [mcpBin.replace(/\\/g, '/')],
+        env: {
+          THEORCHESTRA_PORT: port,
+          THEORCHESTRA_TOKEN_FILE: tokenFileAbs.replace(/\\/g, '/'),
+          // Pass-through NO_AUTH so test harnesses work too.
+          ...(process.env.THEORCHESTRA_NO_AUTH === '1' ? { THEORCHESTRA_NO_AUTH: '1' } : {}),
         },
       },
     };
+    try {
+      const homeMcpPath = path.join(os.homedir(), '.claude', '.mcp.json');
+      if (fs.existsSync(homeMcpPath)) {
+        const raw = fs.readFileSync(homeMcpPath, 'utf-8');
+        const parsed = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
+        if (parsed && typeof parsed.mcpServers === 'object' && parsed.mcpServers) {
+          for (const [name, cfg] of Object.entries(parsed.mcpServers)) {
+            if (name === 'theorchestra') continue; // don't clobber ours
+            mcpServers[name] = cfg;
+          }
+          const inherited = Object.keys(parsed.mcpServers).filter((k) => k !== 'theorchestra');
+          if (inherited.length > 0) {
+            console.log(`[omniclaude] inherited MCP servers from ${homeMcpPath}: ${inherited.join(', ')}`);
+          }
+        }
+      }
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      console.warn(`[omniclaude] could not merge user-global .mcp.json: ${m}`);
+    }
+    const mcpJson = { mcpServers };
     fs.writeFileSync(
       path.join(cwd, '.mcp.json'),
       JSON.stringify(mcpJson, null, 2) + '\n',

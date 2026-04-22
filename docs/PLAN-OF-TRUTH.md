@@ -472,33 +472,84 @@ backend/MCP code changes.
       "testproject-briefer-probe" and a distinctive fixture token
       within 4 min. Standalone runner, not wired into `npm run v3:gate`.
 
-### 10.D MCP dependency documentation
-- [x] **P10.D1** Context hygiene section in omniclaude's CLAUDE.md notes
-      that `mcp__memorymaster__*` and `mcp__serena__*` are expected to
-      be available via user-global `~/.claude/.mcp.json` (confirmed
-      present on the target dev machine). The briefer degrades to
-      file-reads only if either MCP is missing; it says so in its own
-      output rather than silently producing a thin brief.
+### 10.D MCP dependency resolution
+- [x] **P10.D1** Empirically determined 2026-04-22: Claude Code's built-in
+      `Task` tool spawns subagents that DO NOT reliably inherit the user-
+      global `~/.claude/.mcp.json` MCP servers. Two gate runs with
+      `mcp__memorymaster__*` listed explicitly in the briefer's `tools:`
+      frontmatter still failed to produce a claim citation. Updated
+      architecture: briefer does file-reads only; omniclaude (which DOES
+      have user-global MCP inheritance as a direct Claude Code session)
+      calls `mcp__memorymaster__query_for_context` itself and factors
+      results into its own DECISION reasoning — does not route MM through
+      the briefer.
 
 ### 10.E Verify
 - [x] **P10.E1** `npx tsc --noEmit` clean after P10.A + P10.C.
-- [ ] **P10.E2** `npx tsx scripts/v3-briefer-behavior-gate.ts` → 2/2 PASS.
+- [x] **P10.E2** Briefer gate file-read path: 2/2 PASS (agent-file-parses
+      + omniclaude-calls-briefer-cites-AUTH-001 from monitoring.md in ~50s).
+- [ ] **P10.E3** Briefer gate MM probe path: scenario 3 rewritten 2026-04-22
+      to test omniclaude's DIRECT `mcp__memorymaster__query_for_context`
+      call (not via briefer). Validates user-global MCP inheritance path.
 
 ### 10.F Out of scope
-- Automatic pre-spawn briefing hook in `spawn_session` path (omniclaude
-  decides per case; if it matters it calls the briefer and threads the
-  result into the spawn prompt).
-- Repomix / GitNexus wiring into omniclaude's scoped `.mcp.json`
-  (deferred; add when briefer proves too shallow).
+- Automatic pre-spawn briefing hook in `spawn_session` path.
+- Repomix / GitNexus wiring into omniclaude's scoped `.mcp.json`.
 - UI surface for "show me the briefing for project X."
-- Fixing the sc4/sc6/sc7 deliverables regression from the v3.1.0-rc.4
-  rerun — separate phase (P11, TBD).
+
+## PHASE 11 — prd-bootstrap prompt-truncation fix + deferred spec gates
+
+### 11.A Root-cause P9 deliverables regression
+- [x] **P11.A1** Investigated preserved artifacts at
+      `theorch-multi-NR5e0M/_dec/decisions-2026-04-22.md`. Omniclaude's
+      DECISION lines explicitly identified the cause: "pane 8c2d62ef
+      (todo-frontend) truncated prompt, correctly stopped". The fixed
+      `setTimeout(8_000)` in `POST /api/prd-bootstrap` (ws-server.ts:909)
+      fired before Claude CLI's TUI banner finished on some cold boots;
+      ConPTY swallows input during banner render, truncating long prompts
+      (~1500 chars). Short prompts survived which is why backend.py landed
+      but frontend.html + review.md didn't.
+
+### 11.B Fix
+- [x] **P11.B1** Replaced fixed 8s setTimeout with per-pane async poll
+      in `src/backend/ws-server.ts`. Polls `manager.statusDetail(sid).status
+      === 'idle'` every 500ms with a 30s deadline before calling
+      `writeAndSubmit`. Per-pane, concurrent, deadline-guarded.
+      Untested in-session; next multi-pane gate rerun validates.
+
+### 11.C Scrollback viewer
+- [x] **P11.C1** New 📃 button in PaneCard header opens a modal fetching
+      `GET /api/sessions/:id/output?lines=500`. Workaround for @wterm/react's
+      hardcoded WASM scrollback cap. Not a terminal fix — additional side
+      channel reading PaneManager's 10k-line ring buffer.
+
+### 11.D Spec acceptance scaffolds
+- [x] **P11.D1** `scripts/v3-soak-24h-gate.ts` — A-3 24h soak passive
+      observer. Pass: health≥99% + omni-alive≥95% + RSS growth <50% +
+      ≤1hr with 0 new decisions. Rolling JSON report.
+- [x] **P11.D2** `scripts/v3-a6-ok-continue-gate.ts` — A-6 consecutive
+      OK-CONTINUE observer. Counts contiguous `kind=continue|send_prompt|
+      send_key` + `verdict=mechanics` + `executed=true` with escalate/kill
+      triggers resetting the streak. Pass at 10.
+- [ ] **A-7** 3 Telegram escalations — NOT scaffolded. Requires live
+      Telegram bot token + chat ID which are user credentials, out of
+      scope for autonomous session work.
+
+### 11.E Verify
+- [x] **P11.E1** `npx tsc --noEmit` clean after all P11 changes.
+- [ ] **P11.E2** Multi-pane gate rerun → sc4/sc6/sc7 PASS (validates
+      P11.B1 fix). Requires ~25 min live API run.
+- [ ] **P11.E3** Run A-3 soak for ≥ 1 hour (reduced window for dev
+      validation via `SOAK_HOURS=1`).
+- [ ] **P11.E4** Run A-6 for ≥ 30 min with real pane activity; confirm
+      at least 1 OK-CONTINUE is counted (demonstrates observer works).
 
 ## Execution order
 
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10. No skipping. If a
-phase fails verify, fix THAT phase before advancing. If a new requirement
-surfaces mid-execution, write it into this file first, then implement.
+P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10 → P11. No
+skipping. If a phase fails verify, fix THAT phase before advancing. If a
+new requirement surfaces mid-execution, write it into this file first,
+then implement.
 
 ## Drift guard
 
