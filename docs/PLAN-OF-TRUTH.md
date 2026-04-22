@@ -304,9 +304,91 @@ rule engine + one-shot advisor continue to work exactly as today.
 - [x] **P7.H2** Commit `e81b996 feat(v3): persistent omniclaude pane`.
 - [x] **P7.H3** Tagged `v3.1.0-rc.1`.
 
+## PHASE 8 — Close spec gaps + real behavior gate
+
+Added 2026-04-22 after multi-day dogfood found two silent bugs (token-file
+not propagated to MCP subprocess; PaneQueueStore drain dead-zone when pane
+already idle at enqueue) that ALL prior P1-P7 gates missed — they checked
+HTTP shapes, not user-facing outcomes. User correctly called this out:
+"what kind of tests you do that say YES MAN ITS ALL OK!". This phase
+closes the remaining spec gaps and replaces wiring-level gates with a
+behavior-level one.
+
+### 8.A — Close FR-MCP parity gap on `spawn_session`
+
+- [x] **P8.A1** Add optional `cli`, `args`, `tab_title` to `spawnSchema` in
+      `src/mcp/handlers/session-mgmt.ts`.
+- [x] **P8.A2** When `cli !== 'claude'`, bypass all Claude-specific flag
+      logic; pass `{cli, args, cwd, tabTitle}` straight to
+      `backendClient.spawnSession`. On Windows, auto-wrap `.cmd` wrappers
+      through cmd.exe.
+- [x] **P8.A3** Verified live: omniclaude asked to spawn cmd.exe with
+      tab_title=pedrito → pane `aa7d8683` with tabTitle=pedrito appears.
+
+### 8.B — Close FR-Orch-5 decisions-log gap
+
+- [x] **P8.B1** `OmniclaudeDriver` subscribes to `manager.on('data', …)`
+      for the omni sid, strips ANSI + control chars, matches
+      `/DECISION:\s*([\w-]+)\s*[—–-]\s*(.{1,400})/g` across a line-buffered
+      stream, appends to `DecisionLog` with `trigger:'omniclaude_decision'`
+      + `metadata.source:'omniclaude-scrollback'`.
+- [x] **P8.B2** Dedupe by `(kind, first-100-chars-of-reason)` ring (cap 500).
+- [x] **P8.B3** Wired via `startOmniclaudeDriver({decisionLog: orchestrator.log})`
+      in `theorchestra-start.ts`.
+- [x] **P8.B4** Verified live: tmp dir's decisions-YYYY-MM-DD.md contains
+      `omni_decision` entries after a tell-omni prompt.
+
+### 8.C — Real behavior gate (not wiring)
+
+- [x] **P8.C1** `scripts/v3-behavior-gate.ts` — 5 scenarios, each using
+      count-before / act / wait / count-after pattern:
+  - [x] spawn claude pane → new pane appears
+  - [x] spawn cmd.exe pane with tab_title=pedrito → new pane appears
+  - [x] kill pane → pane disappears
+  - [x] decisions log captures omniclaude DECISION lines (45s poll)
+  - [x] pane_idle coalesce steady-state ≤60/min
+- [x] **P8.C2** Env `BEHAVIOR_GATE_KEEP_TMP=1` keeps tmp dir for inspection.
+- [x] **P8.C3** Live run: **5/5 PASS** (45s + 10s + 30s + 0s + 60s).
+
+### 8.D — Doc alignment
+
+- [x] **P8.D1** Addendum appended to `docs/v3.0-decisions.md` (7 items:
+      omniclaude > advisor, auto-respawn opt-in, kill-on-shutdown default off,
+      rule engine fallback-only, per-cwd .mcp.json template, UI surface
+      extended, spawn_session schema extended).
+- [x] **P8.D2** `docs/v3.0-spec.md` FR-MCP updated: spawn_session row lists
+      generic path (`cli`/`args`/`tab_title`).
+- [x] **P8.D3** This P8 section in PLAN-OF-TRUTH.
+
+### 8.E — Queue drain dead-zone fix
+
+- [x] **P8.E1** `POST /api/orchestrator/tell-omni` now calls
+      `queueStore.drainOne(manager, omniSid)` immediately when the target
+      pane is already `idle` — otherwise the queue's pane_idle subscriber
+      never fires (no transition), prompt sits forever. Returns
+      `{enqueuedToOmniclaude, drainedImmediately}`. Fix root-caused by
+      observing omniclaude receiving 3 spawn-pedrito prompts in a row and
+      never acting.
+
+### 8.F — MCP subprocess token-file gotcha fix
+
+- [x] **P8.F1** `startOmniclaudeDriver()` now always writes an ABSOLUTE
+      `THEORCHESTRA_TOKEN_FILE` path into the templated
+      `vault/_omniclaude/.mcp.json`, defaulting to
+      `<repoRoot>/vault/_auth/token.json`. Relative-path fallback was
+      broken because MCP subprocess cwd is `vault/_omniclaude/`, not repo
+      root — every auth-gated call silently 401'd.
+
+### 8.G — Release
+
+- [x] **P8.G1** `npm run v3:gate` still green (10/10).
+- [x] **P8.G2** `scripts/v3-behavior-gate.ts` 5/5 PASS.
+- [x] **P8.G3** Commit (below).
+- [x] **P8.G4** Tagged `v3.1.0-rc.3`.
+
 ## Execution order
 
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7. No skipping. If a phase fails verify,
+P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8. No skipping. If a phase fails verify,
 fix THAT phase before advancing. If a new requirement surfaces mid-execution,
 write it into this file first, then implement.
 

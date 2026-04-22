@@ -590,6 +590,60 @@ function makeHttpHandler(
       return;
     }
 
+    // 2026-04-21 — user-to-omniclaude direct prompt. Writes to chat.userMessage
+    // (so it shows in the chat history + is fetchable via get_chat_messages MCP)
+    // AND enqueues a [USER_MESSAGE] prompt into omniclaude's pane so it acts
+    // on the next turn instead of waiting to poll.
+    if (method === 'POST' && pathname === '/api/orchestrator/tell-omni') {
+      try {
+        const body = (await readJsonBody(req)) as { text?: unknown };
+        if (typeof body.text !== 'string' || body.text.trim().length === 0) {
+          writeJson(res, 400, { error: 'invalid_body', detail: 'text (string) required' });
+          return;
+        }
+        const chat = getChat();
+        if (!chat) {
+          writeJson(res, 503, { error: 'chat_not_ready' });
+          return;
+        }
+        const msg = chat.userMessage(body.text);
+        // Enqueue into omniclaude's pane if it's alive.
+        const omniSid = process.env.THEORCHESTRA_OMNICLAUDE_SID ?? null;
+        let enqueued = false;
+        let drained = false;
+        if (omniSid) {
+          const detail = manager.statusDetail(omniSid);
+          if (detail && detail.status !== 'exited') {
+            const prompt = `[USER_MESSAGE from dashboard]\n${body.text}\nRespond with MCP tool calls + a DECISION line.`;
+            try {
+              queueStore.enqueue(omniSid, prompt);
+              enqueued = true;
+              // If omniclaude is already idle, the queue's pane_idle subscriber
+              // won't fire (no transition). Kick the drain manually so the
+              // prompt actually reaches the pane.
+              if (detail.status === 'idle') {
+                try {
+                  queueStore.drainOne(manager, omniSid);
+                  drained = true;
+                } catch {
+                  /* ignore */
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        writeJson(res, 201, { message: msg, enqueuedToOmniclaude: enqueued, drainedImmediately: drained });
+      } catch (err) {
+        writeJson(res, 400, {
+          error: 'tell_omni_failed',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
     // P7.C — omniclaude uses this to explicitly escalate to the user.
     // Identical semantics to `chat.ask()` firing from the executor, but
     // callable over HTTP so the omniclaude pane (or its MCP tool) can

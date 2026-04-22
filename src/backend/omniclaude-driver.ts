@@ -21,10 +21,11 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
-import type { PtyManager } from './pty-manager.js';
+import type { PtyManager, PtyDataEvent } from './pty-manager.js';
 import type { EventBus } from './events.js';
 import type { PaneQueueStore } from './pane-queue.js';
 import type { SessionId, SseEvent } from '../shared/types.js';
+import type { DecisionLog } from './orchestrator/decision-log.js';
 
 export interface OmniclaudeDriverOptions {
   enabled: boolean;
@@ -32,6 +33,12 @@ export interface OmniclaudeDriverOptions {
   manager: PtyManager;
   bus: EventBus;
   queue: PaneQueueStore;
+  /**
+   * Optional decision log. When provided, omniclaude's "DECISION:" lines
+   * are parsed out of its PTY output stream and appended to the log —
+   * satisfies FR-Orch-5 (every decision → vault/_orchestrator/...).
+   */
+  decisionLog?: DecisionLog;
 }
 
 export interface OmniclaudeDriver {
@@ -117,9 +124,16 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
   // nearest .mcp.json; putting one directly in omniclaude's cwd wins.
   try {
     const port = process.env.THEORCHESTRA_PORT ?? '4300';
-    const tokenFile = process.env.THEORCHESTRA_TOKEN_FILE ?? '';
     const repoRoot = path.resolve(__dirname, '..', '..');
     const mcpBin = path.join(repoRoot, 'bin', 'theorchestra-mcp.js');
+    // Always resolve an ABSOLUTE token-file path so the MCP subprocess
+    // (whose cwd is not this repo) can find it. Without this, MCP tool calls
+    // that hit auth-gated endpoints (spawn_session, kill_session, etc.) fail
+    // silently with 401 — which is exactly what happened when "spawn a pane"
+    // requests were ignored.
+    const tokenFileAbs = path.resolve(
+      process.env.THEORCHESTRA_TOKEN_FILE ?? path.join(repoRoot, 'vault', '_auth', 'token.json'),
+    );
     const mcpJson = {
       mcpServers: {
         theorchestra: {
@@ -128,7 +142,7 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
           args: [mcpBin.replace(/\\/g, '/')],
           env: {
             THEORCHESTRA_PORT: port,
-            ...(tokenFile ? { THEORCHESTRA_TOKEN_FILE: tokenFile.replace(/\\/g, '/') } : {}),
+            THEORCHESTRA_TOKEN_FILE: tokenFileAbs.replace(/\\/g, '/'),
             // Pass-through NO_AUTH so test harnesses work too.
             ...(process.env.THEORCHESTRA_NO_AUTH === '1' ? { THEORCHESTRA_NO_AUTH: '1' } : {}),
           },
@@ -242,10 +256,60 @@ export function startOmniclaudeDriver(opts: OmniclaudeDriverOptions): Omniclaude
     }
   });
 
+  // P8.B — FR-Orch-5 fix: parse "DECISION:" lines out of omniclaude's PTY
+  // output and append to the decisions log. Claude TUIs emit lots of ANSI
+  // + spinner churn, so we accumulate a running line buffer per chunk and
+  // match DECISION lines after ANSI strip.
+  const DECISION_RE = /DECISION:\s*([\w-]+)\s*[—\-–]\s*(.{1,400})/g;
+  const ANSI_RE = /\x1b(?:\[[?0-9;]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g;
+  const CTRL_RE = /[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f]/g;
+  let lineBuf = '';
+  const seenDecisions = new Set<string>();
+  const onData = (evt: PtyDataEvent): void => {
+    if (evt.sessionId !== sid) return;
+    if (!opts.decisionLog) return;
+    // Strip ANSI + control chars, keep newlines.
+    const clean = evt.data.replace(ANSI_RE, '').replace(CTRL_RE, ' ');
+    lineBuf += clean;
+    const nl = lineBuf.lastIndexOf('\n');
+    if (nl === -1) return; // wait for a newline
+    const complete = lineBuf.slice(0, nl);
+    lineBuf = lineBuf.slice(nl + 1);
+    for (const match of complete.matchAll(DECISION_RE)) {
+      const kind = match[1]!.trim();
+      const reason = match[2]!.trim();
+      const dedupeKey = `${kind}|${reason.slice(0, 100)}`;
+      if (seenDecisions.has(dedupeKey)) continue;
+      seenDecisions.add(dedupeKey);
+      // Cap the set so it doesn't grow unbounded.
+      if (seenDecisions.size > 500) {
+        const iter = seenDecisions.values();
+        for (let i = 0; i < 200; i++) seenDecisions.delete(iter.next().value!);
+      }
+      try {
+        opts.decisionLog.append({
+          ts: new Date().toISOString(),
+          sessionId: null,
+          trigger: 'omniclaude_decision',
+          action: { kind: 'no_op', reason: `omni: ${kind} — ${reason}` },
+          classification: { verdict: 'mechanics', reason: 'omniclaude autonomous decision' },
+          executed: true,
+          notes: `From omniclaude scrollback. Kind: ${kind}.`,
+          metadata: { source: 'omniclaude-scrollback', omni_kind: kind, omni_reason: reason },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[omniclaude] decision-log append failed: ${msg}`);
+      }
+    }
+  };
+  opts.manager.on('data', onData);
+
   return {
     sessionId: sid,
     stop(): void {
       unsubscribe();
+      opts.manager.off('data', onData);
     },
   };
 }

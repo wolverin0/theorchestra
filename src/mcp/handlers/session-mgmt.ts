@@ -171,6 +171,24 @@ const discoverHandler: ToolHandler<DiscoverInput> = {
 const permissionModeEnum = z.enum(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
 
 const spawnSchema = {
+  cli: z
+    .string()
+    .optional()
+    .describe(
+      'Optional executable to spawn instead of Claude Code. Use "cmd.exe", "bash", "codex", etc. When set, `persona`, `resume`, `dangerously_skip_permissions`, `permission_mode` are ignored (those are Claude-specific). On Windows this spawns through cmd.exe wrapper automatically if needed. Default: "claude".',
+    ),
+  args: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Raw args to pass when `cli` is set. Ignored for default (Claude) spawn. Example: ["/c", "my-tool", "--flag"] for cmd.exe.',
+    ),
+  tab_title: z
+    .string()
+    .optional()
+    .describe(
+      'Tab title for the new pane. Default: persona name in brackets if persona is set, else "claude", else the `cli` basename.',
+    ),
   cwd: z
     .string()
     .optional()
@@ -217,6 +235,9 @@ const spawnSchema = {
 };
 
 type SpawnInput = {
+  cli?: string;
+  args?: string[];
+  tab_title?: string;
   cwd?: string;
   prompt?: string;
   resume?: string;
@@ -230,13 +251,55 @@ type SpawnInput = {
 const spawnHandler: ToolHandler<SpawnInput> = {
   name: 'spawn_session',
   description:
-    'Launch a new Claude Code session in a new theorchestra PTY pane. Optionally provide a project directory, an initial prompt, a persona, and/or a permission mode. Returns the new pane ID.',
+    'Launch a new pane in theorchestra. Default: Claude Code (--continue, or -r <resume>, or persona + --append-system-prompt-file). For non-Claude CLIs (cmd.exe, bash, codex, gemini-cli, etc.) pass `cli` + optional `args`. Optionally set `tab_title`, `cwd`, `prompt` (initial message, Claude only). Returns the new pane ID.',
   inputSchema: spawnSchema,
   run: async (input) => {
     if (input.split_from !== undefined) {
       return errorResult(
         'split_pane is Phase 6; split_from parameter not yet supported in v3.0',
       );
+    }
+
+    // Generic CLI branch — lets omniclaude spawn cmd.exe, bash, codex, gemini,
+    // any TUI. Bypasses all Claude-specific flag handling.
+    if (input.cli && input.cli !== 'claude') {
+      const cwdGeneric = input.cwd || process.cwd();
+      const argsGeneric = input.args ?? [];
+      // On Windows, .cmd wrappers (like npm-installed CLIs) must be spawned
+      // via cmd.exe /c. If the caller explicitly asked for cmd.exe already,
+      // don't double-wrap. For anything else, we trust the caller's choice.
+      const needsCmdWrap = isWindows() && /\.cmd$/i.test(input.cli);
+      const spawnBodyGeneric = needsCmdWrap
+        ? {
+            cli: 'cmd.exe',
+            args: ['/c', input.cli, ...argsGeneric],
+            cwd: cwdGeneric,
+            tabTitle: input.tab_title || input.cli.split(/[\\/]/).pop() || input.cli,
+            spawnedByPaneId: input.spawned_by_pane_id ?? null,
+          }
+        : {
+            cli: input.cli,
+            args: argsGeneric,
+            cwd: cwdGeneric,
+            tabTitle: input.tab_title || input.cli.split(/[\\/]/).pop() || input.cli,
+            spawnedByPaneId: input.spawned_by_pane_id ?? null,
+          };
+      const spawnGen = await callBackend('spawn_session', () =>
+        backendClient.spawnSession(spawnBodyGeneric),
+      );
+      if (!spawnGen.ok) return spawnGen.result;
+      const genRec = spawnGen.value as Partial<SessionRecord> | null;
+      const genSid =
+        genRec && typeof genRec.sessionId === 'string' ? genRec.sessionId : null;
+      if (!genSid) return errorResult('spawn_session: backend did not return a sessionId');
+      return jsonResult({
+        pane_id: genSid,
+        cli: input.cli,
+        args: argsGeneric,
+        cwd: cwdGeneric,
+        tab_title: spawnBodyGeneric.tabTitle,
+        message: `Generic pane spawned (cli=${input.cli}) as pane ${genSid}.`,
+      });
     }
 
     // Resolve persona if requested — the v2.7 contract is "persona requested
@@ -271,7 +334,7 @@ const spawnHandler: ToolHandler<SpawnInput> = {
     }
 
     const cwd = input.cwd || process.cwd();
-    const tabTitle = input.persona ? `[${input.persona}]` : 'claude';
+    const tabTitle = input.tab_title || (input.persona ? `[${input.persona}]` : 'claude');
 
     // Windows: hop through `cmd.exe /c claude ...` so PATH/PATHEXT resolve
     // claude.cmd the same way a human shell would. Everywhere else, spawn

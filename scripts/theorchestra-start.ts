@@ -139,14 +139,18 @@ async function main(): Promise<void> {
   const manifestStore = new SessionManifestStore(manifestDir);
   attachManifestWriter(manager, manifestStore);
 
-  // Cold-start respawn pass — before spawning a fresh default session,
-  // recover any sessions whose pid is no longer alive.
-  const respawned = respawnDeadSessions(manager, manifestStore);
-  if (respawned.length > 0) {
-    console.log(
-      `[theorchestra] respawned ${respawned.length} session(s) from manifest: ` +
-        respawned.map((r) => `${r.oldSessionId.slice(0, 8)}→${r.newSessionId.slice(0, 8)} (${r.strategy})`).join(', '),
-    );
+  // 2026-04-21: session-manifest respawn is now OPT-IN (was default on). Reason:
+  // respawn-on-boot caused ALL of a user's wezterm instances to die on Ctrl+C
+  // due to process-group tangling with prior-day panes. Default safe: fresh
+  // boot each time. Turn on with THEORCHESTRA_AUTO_RESPAWN=1.
+  if (process.env.THEORCHESTRA_AUTO_RESPAWN === '1') {
+    const respawned = respawnDeadSessions(manager, manifestStore);
+    if (respawned.length > 0) {
+      console.log(
+        `[theorchestra] respawned ${respawned.length} session(s) from manifest: ` +
+          respawned.map((r) => `${r.oldSessionId.slice(0, 8)}→${r.newSessionId.slice(0, 8)} (${r.strategy})`).join(', '),
+      );
+    }
   }
 
   const defaultSession = spawnDefaultSession(manager);
@@ -273,11 +277,13 @@ async function main(): Promise<void> {
 
   // P7.A — persistent omniclaude pane (opt-in). When enabled, it becomes
   // the primary reasoner; rule engine + one-shot advisor stay as fallback.
+  // P8.B — pass the decision log so omniclaude's DECISION lines are captured.
   const omniclaude = startOmniclaudeDriver({
     enabled: process.env.THEORCHESTRA_OMNICLAUDE === '1',
     manager,
     bus,
     queue: queueStore,
+    decisionLog: orchestrator.log,
   });
   if (omniclaude.sessionId) {
     // Expose the omniclaude sid to the ws-server so /api/sessions can filter it.
