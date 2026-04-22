@@ -6,54 +6,59 @@ roles:
     permission_mode: bypassPermissions
     tab_title: todo-frontend
     prompt: |
-      Your only deliverable is frontend.html inside your current working directory.
+      Design and build a **feature-rich todo app UI** in a single self-contained HTML file.
 
-      **Use the Write tool NOW** to save a minimal todo-list UI to frontend.html. Content:
+      Save the file at `frontend.html` in your current working directory using the Write tool.
 
-      <!DOCTYPE html>
-      <html>
-      <head><title>Todos</title><style>body{background:#111;color:#eee;font-family:sans-serif;padding:20px}ul{list-style:none;padding:0}li{background:#222;padding:8px;margin:4px 0}</style></head>
-      <body>
-      <h1>Todos</h1>
-      <input type="text" id="new-todo" placeholder="add..."><button onclick="add()">Add</button>
-      <ul id="todo-list"></ul>
-      <script>function add(){var v=document.getElementById('new-todo').value;if(!v)return;var li=document.createElement('li');li.textContent=v;document.getElementById('todo-list').appendChild(li);document.getElementById('new-todo').value='';}</script>
-      </body>
-      </html>
+      Required features (use your judgement on exact implementation):
+      - Add, edit, delete todos
+      - Mark complete / incomplete (with strikethrough)
+      - Filter: all / active / completed
+      - Priority tags (low / medium / high) — selectable when adding, displayed as a coloured badge
+      - Optional due date field
+      - Search box that filters the visible list live
+      - Keyboard shortcuts: Enter to add, Escape to cancel-edit, `/` to focus search
+      - localStorage persistence so refresh preserves state
+      - Dark/light theme toggle (persisted)
+      - Responsive layout (mobile + desktop)
+      - Accessible: proper labels, ARIA where needed, keyboard-navigable
 
-      After saving, output exactly this DECISION line:
-      DECISION: deliverable — frontend.html complete.
+      Inline CSS + inline JS. No build tools, no frameworks. Aim for ~250-400 lines.
 
-      Then stop. Do not edit anything else.
+      Use the Write tool NOW. After saving, read back the first few lines to confirm it landed, then output exactly:
+
+      DECISION: deliverable — frontend.html complete (<lines> lines, <bytes> bytes).
+
+      Then stop. Do not edit anything else. Do not wait for peer panes.
 
   - name: backend
     persona: dev-backend-api
     permission_mode: bypassPermissions
     tab_title: todo-backend
     prompt: |
-      Your only deliverable is backend.py inside your current working directory.
+      Design and build a **feature-rich Flask REST API** for a todo app in a single Python file.
 
-      **Use the Write tool NOW** to save this Flask API to backend.py:
+      Save the file at `backend.py` in your current working directory using the Write tool.
 
-      from flask import Flask, jsonify, request
-      app = Flask(__name__)
-      TODOS = []
+      Required endpoints (decide status codes + response shapes yourself):
+      - `GET /todos` with query params: `status` (all/active/completed), `priority` (low/medium/high), `q` (search text)
+      - `POST /todos` — validate required `text`, optional `priority`, `due_date`; reject missing/bad input with 400
+      - `PATCH /todos/<id>` — edit text, priority, due_date
+      - `DELETE /todos/<id>` — 404 if not found
+      - `PUT /todos/<id>/complete` — toggle complete flag
+      - `GET /todos/stats` — returns {total, active, completed, by_priority}
 
-      @app.route('/todos', methods=['GET'])
-      def list_todos():
-          return jsonify(TODOS)
+      Include:
+      - In-memory storage with auto-incrementing integer IDs + created_at + updated_at timestamps
+      - CORS headers (`Access-Control-Allow-Origin: *`) for browser dev
+      - Logging via `app.logger` for each mutation
+      - A `/health` endpoint returning `{ok: true}`
 
-      @app.route('/todos', methods=['POST'])
-      def add_todo():
-          data = request.get_json(silent=True) or {}
-          TODOS.append({"text": data.get("text", "")})
-          return jsonify(TODOS[-1]), 201
+      No database, no auth — this is a local-only dev API. Aim for ~120-200 lines.
 
-      if __name__ == '__main__':
-          app.run(port=5555)
+      Use the Write tool NOW. After saving, output:
 
-      After saving, output exactly:
-      DECISION: deliverable — backend.py complete.
+      DECISION: deliverable — backend.py complete (<lines> lines, <bytes> bytes).
 
       Then stop.
 
@@ -62,27 +67,36 @@ roles:
     permission_mode: bypassPermissions
     tab_title: todo-reviewer
     prompt: |
-      Your task is to review frontend.html and backend.py IN your current working directory, then write review.md.
+      Your task: review `frontend.html` + `backend.py` in this cwd, produce `review.md`.
 
-      **Use the Bash tool** to run this one-liner, which waits for both files to exist (up to 8 minutes) and then triggers the next step:
+      **Use the Bash tool** to run this one-liner (waits up to 10 minutes for both files):
 
-      while [ ! -f frontend.html ] || [ ! -f backend.py ]; do sleep 10; done && echo BOTH_FILES_EXIST
+      while [ ! -f frontend.html ] || [ ! -f backend.py ]; do sleep 15; done && echo BOTH_READY
 
-      Once you see "BOTH_FILES_EXIST" in the bash output, use the Read tool to read both files, then use the Write tool to save review.md with this exact structure (replace the bullets with real findings from the files you read):
+      Once you see `BOTH_READY`, use the Read tool to read both files in full. Then use the Write tool to save `review.md` with this shape (fill with REAL findings from the specific code you read):
 
       ## Summary
-      Two-sentence description of what you reviewed.
+      Three sentences describing what you reviewed + overall impression.
 
-      ## Security findings
-      - finding 1 about input validation
-      - finding 2 about XSS or injection risk
-      - finding 3 about CSRF or auth
+      ## Security findings (at least 5)
+      - finding 1 ...
+      - finding 2 ...
+      - ...
 
-      ## Quality findings
-      - finding 1 about code structure
-      - finding 2 about robustness
+      ## Quality findings (at least 4)
+      - finding 1 ...
+      - finding 2 ...
+      - ...
 
-      After review.md is saved, output exactly:
-      DECISION: deliverable — review.md complete.
+      ## Recommended next actions (at least 3)
+      - action 1 ...
+      - action 2 ...
+      - ...
+
+      Cite line numbers or identifier names from the actual files when relevant. Be specific — avoid generic "consider adding validation" fluff. Aim for ~150-250 lines of markdown.
+
+      After saving, output:
+
+      DECISION: deliverable — review.md complete (<lines> lines, <bytes> bytes).
 
       Then stop.
