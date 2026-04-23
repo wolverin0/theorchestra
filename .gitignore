@@ -8,12 +8,21 @@ logs/
 .claude-flow/
 .memory-bridge-hashes.json
 
+# Ephemeral dogfood artefacts
+test-workspace/_sessions/
+test-workspace/_decisions/
+test-workspace/token.json
+test-workspace/orch-cfg.md
+test-workspace/active_tasks.md
+test-workspace/boot*.log
+test-workspace/auto-handoff-result.json
+test-workspace/mm-inbox.jsonl
+
 # Runtime / local state (don't ship)
 .events.json
 vault/
 obsidian-vault/
 tmp/
-bin/
 handoff.md
 active_tasks.md
 local-biz-sites/
@@ -37,6 +46,8 @@ test-*.py
 # …except images referenced by README/docs
 !docs/screenshots/*.png
 !docs/screenshots/*.jpg
+!docs/screenshots/**/*.png
+!docs/screenshots/**/*.jpg
 
 # theorchestra local scratch
 scripts/.*-test.cjs
@@ -50,3 +61,6 @@ tmp/dashboard-cjs-legacy/
 tmp/legacy-root/
 tmp/screenshots/
 tmp/legacy-src/
+
+# v3.0 frontend build output (regenerated via `npm run v3:build-frontend`)
+dist/
