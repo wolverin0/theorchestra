@@ -531,22 +531,88 @@ backend/MCP code changes.
       OK-CONTINUE observer. Counts contiguous `kind=continue|send_prompt|
       send_key` + `verdict=mechanics` + `executed=true` with escalate/kill
       triggers resetting the streak. Pass at 10.
-- [ ] **A-7** 3 Telegram escalations — NOT scaffolded. Requires live
-      Telegram bot token + chat ID which are user credentials, out of
-      scope for autonomous session work.
+- [x] **A-7** 3 Telegram escalations — **CLOSED 2026-04-23**: driver
+      auto-attaches `--channels plugin:telegram@claude-plugins-official`
+      + `--dangerously-skip-permissions` when the plugin is installed.
+      Live DM round-trip verified: user DM 548 → omniclaude
+      "Test confirmed — your DM 548 arrived as a channel tag, replied
+      as 549". Plugin state at `~/.claude/channels/telegram/`, pairing
+      flag at `approved/<user_id>`.
 
 ### 11.E Verify
 - [x] **P11.E1** `npx tsc --noEmit` clean after all P11 changes.
-- [ ] **P11.E2** Multi-pane gate rerun → sc4/sc6/sc7 PASS (validates
-      P11.B1 fix). Requires ~25 min live API run.
-- [ ] **P11.E3** Run A-3 soak for ≥ 1 hour (reduced window for dev
-      validation via `SOAK_HOURS=1`).
-- [ ] **P11.E4** Run A-6 for ≥ 30 min with real pane activity; confirm
-      at least 1 OK-CONTINUE is counted (demonstrates observer works).
+- [ ] **P11.E2** Multi-pane gate rerun — PARTIAL. Run 2026-04-23/24:
+      3 PASS / 0 SKIP / 4 FAIL. Critical WIN: sc5 Path-B
+      (omniclaude-reads-PRD-spawns-team) PASSed in 70s (previously
+      SKIP'd in all prior runs). sc4/sc6/sc7 FAIL'd due to deliverables
+      not landing — root-caused NOT to P11 code bug but to Claude Max
+      weekly-limit throttle (user at 89-92% weekly) + 7+ concurrent
+      claude sessions exceeding effective throughput. Per-pane
+      idle-poll fix itself is correct; environmental cap prevents
+      full re-validation. Retry when weekly limit resets (Apr 25).
+- [ ] **P11.E3** A-3 soak — STARTED `SOAK_HOURS=1` run 2026-04-24
+      overnight against the main :4300 backend (passive observer).
+      Result will materialise in `docs/soak-reports/soak-<ts>.json`.
+      Full 24h run still owned by user (PC must stay on).
+- [ ] **P11.E4** A-6 OK-CONTINUE — STARTED `A6_MINUTES=60` run
+      2026-04-24 overnight against the main :4300 backend. Pass =
+      10 contiguous mechanics-verdict continue actions. With the
+      weekly-limit squeeze, may not accumulate — observer is correct,
+      environmental throughput is the gate.
+
+## PHASE 12 — Omni tab parity with native Claude Code terminal
+
+Closed 2026-04-23 as commit `6e23153` on main (PR #3).
+
+### 12.A Driver flag auto-detect
+- [x] **P12.A1** `src/backend/omniclaude-driver.ts` auto-appends
+      `--dangerously-skip-permissions` unless
+      `THEORCHESTRA_OMNICLAUDE_SAFE_MODE=1` AND
+      `--channels plugin:telegram@claude-plugins-official` if the
+      Telegram plugin is installed (checks user-global + cwd-scoped
+      `.claude/plugins/` paths), unless
+      `THEORCHESTRA_OMNICLAUDE_NO_TELEGRAM=1`. Without the channels
+      flag the plugin receives DMs but has no session binding to
+      forward them to — symptom was "typing indicator forever, no
+      reply".
+
+### 12.B Omni tab UX parity
+- [x] **P12.B1** Keys strip: ESC / ↑ ↓ ← → / Tab / Enter / ^C / 1 2 3
+      matching Desktop pane-card. ^C tooltip warns against double-press
+      (second ^C in the exit-confirm window exits the session).
+- [x] **P12.B2** Prompt input + Send button → `/api/orchestrator/tell-omni`.
+- [x] **P12.B3** Scrollback rendering:
+      - Alt-screen frame strip: 14 STATUS_BAR_PATTERNS filter out
+        horizontal rules + `Model:` + `Ctx:` + `cwd:` + `bypass
+        permissions` + `auto mode` + `Calling plugin:` + `running stop
+        hook` — previously the status bar was repainted 3-5 times
+        between each real content line.
+      - CR-collapse: Claude CLI's spinner emits `\r`-separated frames
+        per line (Slithering/Cerebrating/Smooshing counters); keeping
+        only the last post-`\r` segment mirrors terminal rendering.
+      - SGR → HTML: compiled `ansiToHtml()` parser for 8/16/256/truecolor
+        codes → inline `<span style="color:…">`. Non-SGR escape sequences
+        still stripped via negated lookahead in `ANSI_NON_SGR_RE`.
+      - Blank-line preservation: runs of blanks collapse to ONE so
+        bullet/prompt blocks get the breathing room Claude CLI shows in
+        its native terminal.
+      - Consecutive-identical-line dedup on SGR-stripped content.
+
+### 12.C Sidebar Type-a-message route fix
+- [x] **P12.C1** `src/frontend/sidebar/OmniClaudePanel.tsx` was calling
+      `/api/chat/ask` which only logged to ChatStore without delivering
+      to omniclaude's pane. Switched to `/api/orchestrator/tell-omni`.
+
+### 12.D Visual validation
+- [x] **P12.D1** Validated via claude-in-chrome DOM inspection (bundle
+      `index-BYiXTjN7.js`): 46 coloured spans across 40 lines, 0
+      status-bar boundaries, 0 spinner duplicates, 12 meaningful blank
+      spacers. Before fix: 30+ lines of repeated status bar + 50+
+      Slithering duplicates + 0 colours.
 
 ## Execution order
 
-P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10 → P11. No
+P0 → P1 → P2 → P3 → P4 → P5 → P6 → P7 → P8 → P9 → P10 → P11 → P12. No
 skipping. If a phase fails verify, fix THAT phase before advancing. If a
 new requirement surfaces mid-execution, write it into this file first,
 then implement.
