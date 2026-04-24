@@ -872,7 +872,15 @@ function makeHttpHandler(
           if (personaPath) {
             claudeArgs.splice(0, claudeArgs.length, '--append-system-prompt-file', personaPath);
           }
-          if (role.permission_mode) {
+          // Passing both `--permission-mode bypassPermissions` AND
+          // `--dangerously-skip-permissions` to claude CLI hangs the TUI on
+          // boot (Path A regression observed 2026-04-24: all todo panes
+          // spawned but never produced deliverables, while Path B omniclaude
+          // spawns — which only use --dangerously-skip-permissions — worked
+          // end-to-end). Only forward `plan` and `acceptEdits` since those
+          // are orthogonal to the bypass flag; skip bypassPermissions since
+          // it is already covered by --dangerously-skip-permissions below.
+          if (role.permission_mode && role.permission_mode !== 'bypassPermissions') {
             claudeArgs.push('--permission-mode', role.permission_mode);
           }
           // Always bypass permissions for PRD-spawned teams so they can write
@@ -900,35 +908,46 @@ function makeHttpHandler(
           }
         }
 
-        // Fire the initial role prompts asynchronously. Wait per-pane for
-        // Claude's TUI to finish booting — banner render, then `❯` prompt
-        // transitions status from 'working' to 'idle'. Writing before that
-        // loses early input (ConPTY swallows during banner) and truncates
-        // long prompts, which is the P11 regression root cause: fixed 8s
-        // delay was too short for some Claude CLI cold boots on Windows.
+        // Fire the initial role prompts asynchronously. TWO-stage wait per
+        // pane: (1) wait for FIRST output byte (pane.lastOutputAt goes non-null
+        // — Claude CLI is rendering its banner), (2) wait for output to
+        // quiesce (no new bytes for 2s — banner finished, `❯` prompt is
+        // waiting for input). Naively polling statusDetail().status==='idle'
+        // doesn't work: pty-manager.status() returns 'idle' when lastDataAt is
+        // null (fresh pane with no output yet), so writeAndSubmit fires into
+        // a not-yet-rendered TUI and Claude loses the prompt.
         //
-        // Per pane: poll statusDetail until status==='idle' OR 30s deadline;
-        // then writeAndSubmit. If deadline hits we fire anyway and log —
-        // that's still better than never sending at all.
+        // Bug history: v1 fixed 8s setTimeout → too short on cold Windows
+        // boots. v2 (P11) "wait for idle" → triggered immediately on fresh
+        // panes because lastDataAt=null reads as idle. v3 (this): wait for
+        // first output, then quiescence.
         for (const { sid, prompt } of pendingPrompts) {
           void (async (): Promise<void> => {
-            const deadline = Date.now() + 30_000;
-            let lastStatus: string = 'unknown';
-            while (Date.now() < deadline) {
+            const bootDeadline = Date.now() + 45_000; // cold Windows Claude can take 20s+
+            const quietMs = 2000;                      // how long output must be still
+            // Stage 1: wait for first output byte.
+            while (Date.now() < bootDeadline) {
               const detail = manager.statusDetail(sid);
               if (!detail || detail.status === 'exited') {
-                console.error(`[prd-bootstrap] pane ${sid.slice(0, 8)} exited before prompt could be sent`);
+                console.error(`[prd-bootstrap] pane ${sid.slice(0, 8)} exited before boot`);
                 return;
               }
-              if (detail.status === 'idle') {
-                lastStatus = 'idle';
+              if (detail.lastOutputAt) break;
+              await new Promise((r) => setTimeout(r, 300));
+            }
+            // Stage 2: wait for output to be quiet for `quietMs`.
+            while (Date.now() < bootDeadline) {
+              const detail = manager.statusDetail(sid);
+              if (!detail || detail.status === 'exited') {
+                console.error(`[prd-bootstrap] pane ${sid.slice(0, 8)} exited during banner render`);
+                return;
+              }
+              const lastOut = detail.lastOutputAt ? Date.parse(detail.lastOutputAt) : null;
+              if (lastOut !== null && Date.now() - lastOut >= quietMs) {
+                console.log(`[prd-bootstrap] pane ${sid.slice(0, 8)} quiesced after boot; dispatching prompt`);
                 break;
               }
-              lastStatus = detail.status;
-              await new Promise((r) => setTimeout(r, 500));
-            }
-            if (lastStatus !== 'idle') {
-              console.warn(`[prd-bootstrap] pane ${sid.slice(0, 8)} not idle after 30s (status=${lastStatus}); firing anyway`);
+              await new Promise((r) => setTimeout(r, 300));
             }
             await manager.writeAndSubmit(sid, prompt, 300).catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
